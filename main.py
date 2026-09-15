@@ -1975,18 +1975,42 @@ async def main():
 
 
 @app.post("/debug/migrate")
-def run_migration(source_db: str = "ibaraholka.db"):
-    """One-shot: copy rows from local sqlite to postgres."""
+def run_migration(source_db: str = "ibaraholka.db", body: dict = None):
+    """One-shot: copy rows from local sqlite to postgres.
+
+    Looks for sqlite file in:
+    1. CWD / given path
+    2. /tmp/
+    3. /data/
+    4. Falls back to uploading via JSON body: {"sqlite_b64": "..."}
+    """
     import io
     import contextlib
+    import base64
     if not USE_POSTGRES:
         return {"ok": False, "error": "Postgres not configured"}
-    if not os.path.exists(source_db):
-        return {"ok": False, "error": f"sqlite not found: {source_db}"}
+    # Try local paths
+    paths_to_try = [source_db, os.path.join("/tmp", source_db), os.path.join("/data", source_db)]
+    found = None
+    for p in paths_to_try:
+        if os.path.exists(p):
+            found = p
+            break
+    # Fallback: inline upload via body
+    if not found and body and body.get("sqlite_b64"):
+        try:
+            raw = base64.b64decode(body["sqlite_b64"])
+            with open("/tmp/ibaraholka.db", "wb") as f:
+                f.write(raw)
+            found = "/tmp/ibaraholka.db"
+        except Exception as e:
+            return {"ok": False, "error": f"decode failed: {e}"}
+    if not found:
+        return {"ok": False, "error": f"sqlite not found in: {paths_to_try} (no body either)"}
     buf = io.StringIO()
     try:
         with contextlib.redirect_stdout(buf):
-            migrate_sqlite_to_pg(source_db)
+            migrate_sqlite_to_pg(found)
         return {"ok": True, "log": buf.getvalue()}
     except Exception as e:
         return {"ok": False, "error": str(e)[:500], "log": buf.getvalue()}
