@@ -1963,6 +1963,36 @@ async def main():
     await asyncio.gather(run_bot(), run_api())
 
 
+
+@app.get("/debug/test-pg")
+def test_postgres():
+    """Test direct PostgreSQL connection."""
+    import os
+    import psycopg
+    url = os.getenv("DATABASE_URL", "").strip()
+    if not url:
+        return {"ok": False, "error": "DATABASE_URL not set"}
+    try:
+        with psycopg.connect(url, connect_timeout=10) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT current_database(), version();")
+                db_name, version = cur.fetchone()
+                cur.execute("""
+                    SELECT table_name FROM information_schema.tables 
+                    WHERE table_schema='public' ORDER BY table_name
+                """)
+                tables = [r[0] for r in cur.fetchall()]
+                return {
+                    "ok": True,
+                    "database": db_name,
+                    "version": version[:60],
+                    "tables": tables,
+                    "tables_count": len(tables),
+                }
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:300]}
+
+
 if __name__ == "__main__":
     try:
         asyncio.run(main())
