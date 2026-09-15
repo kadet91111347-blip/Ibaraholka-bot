@@ -19,3 +19,5 @@ services:
         sync: false
       - key: WEBAPP_URL
         sync: false
+      - key: DATABASE_URL
+        sync: false

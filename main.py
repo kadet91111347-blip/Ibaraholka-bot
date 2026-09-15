@@ -18,7 +18,7 @@ Build: 2026-09-14T18:30 force-redeploy-test
 import os
 import asyncio
 import logging
-import sqlite3
+# import sqlite3 (now via db_adapter)
 import json
 import time
 import hmac
@@ -36,6 +36,7 @@ import uvicorn
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.client.default import DefaultBotProperties
+from db_adapter import db_cursor, get_db_connection, migrate_sqlite_to_pg, USE_POSTGRES
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart, Command
 from aiogram.types import LabeledPrice, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
@@ -92,17 +93,9 @@ print(f"[DB] Using DB file: {DB_FILE}", flush=True)
 # ============================================================
 # Database
 # ============================================================
-def get_db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_FILE, timeout=30, isolation_level=None)  # autocommit mode
-    conn.row_factory = sqlite3.Row
-    # WAL mode: better concurrent read/write
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    return conn
-
 
 def init_db():
-    with get_db() as conn:
+    with db_cursor() as conn:
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS listings (
             id TEXT PRIMARY KEY,
@@ -141,7 +134,7 @@ def init_db():
         conn.executescript("""
         -- История диалогов
         CREATE TABLE IF NOT EXISTS conversations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGINT PRIMARY KEY,
             user_id INTEGER NOT NULL,
             username TEXT DEFAULT '',
             user_message TEXT NOT NULL,
@@ -159,7 +152,7 @@ def init_db():
 
         -- Сгенерированные AI ответы (после обучения)
         CREATE TABLE IF NOT EXISTS ai_responses (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGINT PRIMARY KEY,
             intent TEXT NOT NULL,
             user_pattern TEXT NOT NULL,
             ai_response TEXT NOT NULL,
@@ -174,7 +167,7 @@ def init_db():
 
         -- Обучение: какие варианты работают лучше
         CREATE TABLE IF NOT EXISTS variant_stats (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGINT PRIMARY KEY,
             intent TEXT NOT NULL,
             variant_idx INTEGER NOT NULL,
             uses INTEGER DEFAULT 0,
@@ -186,7 +179,7 @@ def init_db():
 
         -- Паттерны обучения (что бот уже понял)
         CREATE TABLE IF NOT EXISTS learned_patterns (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGINT PRIMARY KEY,
             pattern TEXT NOT NULL UNIQUE,
             intent TEXT NOT NULL,
             confidence REAL DEFAULT 0.5,
@@ -491,7 +484,7 @@ def save_conversation(user_id: int, username: str, user_msg: str, bot_resp: str,
                       intent: str, variant: int):
     """Сохраняет диалог для последующего обучения."""
     try:
-        with get_db() as conn:
+        with db_cursor() as conn:
             conn.execute(
                 """INSERT INTO conversations
                    (user_id, username, user_message, bot_response, intent, response_variant, created)
@@ -513,7 +506,7 @@ def save_conversation(user_id: int, username: str, user_msg: str, bot_resp: str,
 def update_user_profile(user_id: int, username: str, first_name: str, intent: str):
     """Обновляет профиль клиента."""
     try:
-        with get_db() as conn:
+        with db_cursor() as conn:
             existing = conn.execute(
                 "SELECT messages_count, last_messages FROM user_profiles WHERE user_id = ?",
                 (user_id,)
@@ -545,7 +538,7 @@ def update_user_profile(user_id: int, username: str, first_name: str, intent: st
 def get_learned_response(intent: str, user_text: str) -> Optional[str]:
     """Ищет наиболее подходящий AI-сгенерированный ответ."""
     try:
-        with get_db() as conn:
+        with db_cursor() as conn:
             # Поиск похожего паттерна
             words = user_text.lower().split()[:5]  # первые 5 слов
             for word in words:
@@ -568,7 +561,7 @@ def get_learned_response(intent: str, user_text: str) -> Optional[str]:
 def adapt_response_style(base: str, user_id: int) -> str:
     """Адаптирует стиль ответа под пользователя."""
     try:
-        with get_db() as conn:
+        with db_cursor() as conn:
             prof = conn.execute(
                 "SELECT * FROM user_profiles WHERE user_id = ?", (user_id,)
             ).fetchone()
@@ -589,7 +582,7 @@ def adapt_response_style(base: str, user_id: int) -> str:
 def is_user_hot_lead(user_id: int) -> bool:
     """Определяет горячий лид (3+ сообщения за час)."""
     try:
-        with get_db() as conn:
+        with db_cursor() as conn:
             hour_ago = int(time.time()) - 3600
             cnt = conn.execute(
                 "SELECT COUNT(*) AS c FROM conversations WHERE user_id = ? AND created >= ?",
@@ -612,7 +605,7 @@ async def on_feedback(callback: types.CallbackQuery):
     rating = 1 if rating_type == "good" else -1
 
     try:
-        with get_db() as conn:
+        with db_cursor() as conn:
             # Находим последний диалог с этим юзером
             last = conn.execute(
                 "SELECT id, intent, response_variant FROM conversations WHERE user_id = ? ORDER BY created DESC LIMIT 1",
@@ -646,7 +639,7 @@ async def on_feedback(callback: types.CallbackQuery):
 def schedule_learning():
     """Запускает обучение на последних диалогах (можно через cron)."""
     try:
-        with get_db() as conn:
+        with db_cursor() as conn:
             # Берём успешные диалоги за последний час
             hour_ago = int(time.time()) - 3600
             good_convs = conn.execute(
@@ -694,7 +687,7 @@ async def cmd_learn(message: types.Message):
     if message.from_user.id != 748834052:
         return  # только владельцу
     try:
-        with get_db() as conn:
+        with db_cursor() as conn:
             ai_count = conn.execute("SELECT COUNT(*) AS c FROM ai_responses").fetchone()['c']
             conv_count = conn.execute("SELECT COUNT(*) AS c FROM conversations").fetchone()['c']
             good = conn.execute("SELECT COUNT(*) AS c FROM conversations WHERE rating > 0").fetchone()['c']
@@ -738,7 +731,7 @@ async def cmd_paid(message: types.Message):
         return
     listing_id = parts[1].strip()
     # Find listing
-    with get_db() as conn:
+    with db_cursor() as conn:
         row = conn.execute("SELECT * FROM listings WHERE id=?", (listing_id,)).fetchone()
         if not row:
             await message.answer(f"❌ Объявление <code>{listing_id}</code> не найдено")
@@ -777,7 +770,7 @@ async def cmd_paid(message: types.Message):
 async def cmd_stats(message: types.Message):
     if message.from_user.id not in ADMIN_IDS and ADMIN_IDS:
         return
-    with get_db() as conn:
+    with db_cursor() as conn:
         total = conn.execute("SELECT COUNT(*) c FROM listings").fetchone()["c"]
         active = conn.execute("SELECT COUNT(*) c FROM listings WHERE status='active'").fetchone()["c"]
         pending = conn.execute("SELECT COUNT(*) c FROM listings WHERE status='pending' OR status='awaiting_payment'").fetchone()["c"]
@@ -804,7 +797,7 @@ async def on_confirm_paid(callback: types.CallbackQuery):
     """User tapped 'Я оплатил' — activate listing immediately."""
     listing_id = callback.data.split(":", 1)[1]
     item_dict = None
-    with get_db() as conn:
+    with db_cursor() as conn:
         row = conn.execute("SELECT * FROM listings WHERE id=?", (listing_id,)).fetchone()
         if not row:
             await callback.answer("Объявление не найдено", show_alert=True)
@@ -864,14 +857,14 @@ async def success_payment(message: types.Message):
 
     if listing_id:
         # Activate in DB
-        with get_db() as conn:
+        with db_cursor() as conn:
             conn.execute("UPDATE listings SET status='active' WHERE id=?", (listing_id,))
             conn.commit()
 
         # Post to channel (paid listings always go to channel)
         try:
             row = None
-            with get_db() as conn:
+            with db_cursor() as conn:
                 row = conn.execute(
                     "SELECT * FROM listings WHERE id=?", (listing_id,)
                 ).fetchone()
@@ -1009,7 +1002,7 @@ async def post_to_channel(listing_id: str, item: ListingIn, user: Dict[str, Any]
         print(f"[POST_CHANNEL] {listing_id}: Telegram ok={result.get('ok')}", flush=True)
         if result.get("ok"):
             msg_id = result["result"]["message_id"]
-            with get_db() as conn:
+            with db_cursor() as conn:
                 conn.execute("UPDATE listings SET channel_message_id=? WHERE id=?", (msg_id, listing_id))
                 conn.commit()
             print(f"[POST_CHANNEL] {listing_id}: SAVED msg_id={msg_id}", flush=True)
@@ -1160,7 +1153,7 @@ def debug_state():
         "railway_git_commit_sha": os.getenv("RAILWAY_GIT_COMMIT_SHA", "N/A")[:8],
     }
     try:
-        with get_db() as conn:
+        with db_cursor() as conn:
             n = conn.execute("SELECT COUNT(*) as cnt FROM listings").fetchone()
             state["listings_count"] = n["cnt"]
             last = conn.execute("SELECT id, tier, status, channel_message_id FROM listings ORDER BY created DESC LIMIT 5").fetchall()
@@ -1172,10 +1165,24 @@ def debug_state():
         state["db_error"] = str(e)
     # Schema check
     try:
-        with get_db() as conn:
-            cols = conn.execute("PRAGMA table_info(listings)").fetchall()
-            state["listings_columns"] = [r[1] for r in cols]
-            state["has_channel_message_id"] = "channel_message_id" in [r[1] for r in cols]
+        with db_cursor() as conn:
+            # PRAGMA works only in SQLite. For Postgres we use information_schema.
+            try:
+                cols = conn.execute("PRAGMA table_info(listings)").fetchall()
+                state["listings_columns"] = [r[1] for r in cols]
+            except Exception:
+                cols = conn.execute(
+                    "SELECT column_name FROM information_schema.columns WHERE table_name='listings'"
+                ).fetchall()
+                # PG returns tuples, sqlite returns Row objects; handle both
+                col_names = []
+                for c in cols:
+                    try:
+                        col_names.append(c['column_name'])
+                    except Exception:
+                        col_names.append(c[0])
+                state["listings_columns"] = col_names
+            state["has_channel_message_id"] = "channel_message_id" in state["listings_columns"]
     except Exception as e:
         state["schema_error"] = str(e)
     return state
@@ -1189,7 +1196,7 @@ def list_listings(
 ):
     """Public list of active listings (sorted by tier then recency)."""
     now = int(datetime.now().timestamp())
-    with get_db() as conn:
+    with db_cursor() as conn:
         q = (
             "SELECT id, user_id, user_name, user_username, title, description, price, cat, type, "
             "contact, photo, tier, city, status, created, expires_at "
@@ -1253,7 +1260,7 @@ async def create_listing(item: ListingIn, request: Request):
 
     initial_status = "active" if (item.tier == "free" or is_demo_user or is_admin) else "awaiting_payment"
 
-    with get_db() as conn:
+    with db_cursor() as conn:
         conn.execute(
             """INSERT INTO listings
             (id, user_id, user_name, user_username, title, description, price, cat, type,
@@ -1395,7 +1402,7 @@ async def create_listing(item: ListingIn, request: Request):
                         f.write(log_msg + "\n")
                 except Exception:
                     pass
-                with get_db() as conn:
+                with db_cursor() as conn:
                     cur = conn.execute(
                         "UPDATE listings SET channel_message_id=? WHERE id=?",
                         (msg_id, listing_id),
@@ -1427,7 +1434,7 @@ async def create_listing(item: ListingIn, request: Request):
 
     # If invoice failed for paid tier (not demo), downgrade listing to free
     if item.tier in ("premium", "vip") and invoice_error and not is_demo_user:
-        with get_db() as conn:
+        with db_cursor() as conn:
             conn.execute("UPDATE listings SET tier='free' WHERE id=?", (listing_id,))
             conn.commit()
         logger.info(f"Listing {listing_id}: downgraded to free due to invoice failure")
@@ -1615,7 +1622,7 @@ async def yukassa_webhook(request: Request):
 
         # Activate listing
         item_dict = None
-        with get_db() as conn:
+        with db_cursor() as conn:
             row = conn.execute(
                 "SELECT * FROM listings WHERE id=?", (listing_id,)
             ).fetchone()
@@ -1670,7 +1677,7 @@ async def debug_create_vip_test(request: Request):
     user_name = request.headers.get("x-telegram-user-name", "Sasha")
     user_username = request.headers.get("x-telegram-user-username", "Izdelie0810")
     listing_id = "l_test_" + str(int(datetime.now().timestamp() * 1000))
-    with get_db() as conn:
+    with db_cursor() as conn:
         conn.execute(
             "INSERT INTO listings (id, user_id, user_name, user_username, title, description, price, cat, type, contact, photo, tier, city, status, created, expires_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1724,7 +1731,7 @@ async def delete_listing(listing_id: str, request: Request):
     deleted_from_channel = False
     if admin_token == ADMIN_TOKEN:
         # Admin bypass: delete any listing + from channel
-        with get_db() as conn:
+        with db_cursor() as conn:
             row = conn.execute(
                 "SELECT channel_message_id FROM listings WHERE id=?",
                 (listing_id,)
@@ -1736,7 +1743,7 @@ async def delete_listing(listing_id: str, request: Request):
         return {"ok": True, "admin": True, "channel_deleted": deleted_from_channel}
 
     user = await get_user(request.headers.get("authorization", ""))
-    with get_db() as conn:
+    with db_cursor() as conn:
         row = conn.execute(
             "SELECT user_id, channel_message_id FROM listings WHERE id=?",
             (listing_id,)
@@ -1757,7 +1764,7 @@ async def admin_listings(admin_token: str = ""):
     """Admin: list all listings. Pass ?admin_token=demo."""
     if admin_token != ADMIN_TOKEN:
         raise HTTPException(403, "Admin token required")
-    with get_db() as conn:
+    with db_cursor() as conn:
         rows = conn.execute(
             "SELECT id, user_id, user_name, user_username, title, description, price, cat, type, "
             "contact, photo, tier, city, status, created, expires_at, channel_message_id "
@@ -1779,7 +1786,7 @@ async def admin_stats(admin_token: str = ""):
     week_start = today_start - 7 * 86400
     month_start = today_start - 30 * 86400
 
-    with get_db() as conn:
+    with db_cursor() as conn:
         # All listings
         all_rows = conn.execute(
             "SELECT id, user_id, user_username, tier, status, created, price FROM listings"
@@ -1867,7 +1874,7 @@ async def admin_post_channel(request: Request):
     if not listing_id:
         raise HTTPException(400, "listing_id required")
 
-    with get_db() as conn:
+    with db_cursor() as conn:
         row = conn.execute("SELECT * FROM listings WHERE id=?", (listing_id,)).fetchone()
     if not row:
         raise HTTPException(404, "Listing not found")
@@ -1903,7 +1910,7 @@ async def approve_listing(listing_id: str, request: Request):
     user = await get_user(request.headers.get("authorization", ""))
     if user["id"] not in ADMIN_IDS:
         raise HTTPException(403, "Admin only")
-    with get_db() as conn:
+    with db_cursor() as conn:
         conn.execute("UPDATE listings SET status='active' WHERE id=?", (listing_id,))
         conn.commit()
     return {"ok": True}
