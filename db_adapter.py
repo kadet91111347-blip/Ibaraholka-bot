@@ -90,16 +90,26 @@ class _PostgresCursor:
         row = self._cursor.fetchone()
         if row is None:
             return None
-        cols = [d.name for d in self._description]
-        result = _PostgresRow(zip(cols, row))
-        return result
+        # If cursor returns dict (RealDictCursor), return as-is
+        if isinstance(row, dict):
+            return row
+        cols = self._get_cols()
+        return _PostgresRow(zip(cols, row))
 
     def fetchall(self):
         rows = self._cursor.fetchall()
         if not rows:
             return []
-        cols = [d.name for d in self._description]
+        # If cursor returns dicts, return as-is
+        if isinstance(rows[0], dict):
+            return rows
+        cols = self._get_cols()
         return [_PostgresRow(zip(cols, r)) for r in rows]
+
+    def _get_cols(self):
+        if self._description is None:
+            return []
+        return [d.name for d in self._description]
 
     def fetchmany(self, size=1):
         rows = self._cursor.fetchmany(size)
