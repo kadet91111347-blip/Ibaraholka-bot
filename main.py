@@ -1968,12 +1968,12 @@ async def main():
 def test_postgres():
     """Test direct PostgreSQL connection."""
     import os
-    import psycopg
+    import psycopg2
     url = os.getenv("DATABASE_URL", "").strip()
     if not url:
         return {"ok": False, "error": "DATABASE_URL not set"}
     try:
-        with psycopg.connect(url, connect_timeout=10) as conn:
+        with psycopg2.connect(url, connect_timeout=10) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT current_database(), version();")
                 db_name, version = cur.fetchone()

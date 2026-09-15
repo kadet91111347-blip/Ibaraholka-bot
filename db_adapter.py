@@ -1,11 +1,11 @@
 """
-DB adapter: provides sqlite3-like API on top of psycopg (PostgreSQL).
+DB adapter: provides sqlite3-like API on top of psycopg2 (PostgreSQL).
 All existing main.py code keeps using get_db() / conn.execute / conn.row_factory.
 """
 
 import os
-import psycopg
-from psycopg.rows import dict_row
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from contextlib import contextmanager
 
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
@@ -91,10 +91,10 @@ class _PostgresCursor:
 class _PostgresConnection:
     """Connection wrapper compatible with sqlite3.Connection usage in main.py."""
     def __init__(self):
-        # Build connection - pooler URL requires sslmode=require
-        # but DATABASE_URL already includes sslmode.
-        self._conn = psycopg.connect(DATABASE_URL, autocommit=True)
-        self._cursor = _PostgresCursor(self._conn.cursor())
+        # Parse URL to handle sslmode correctly
+        self._conn = psycopg2.connect(DATABASE_URL)
+        self._conn.autocommit = True
+        self._cursor = _PostgresCursor(self._conn.cursor(cursor_factory=RealDictCursor))
 
     @property
     def row_factory(self):
@@ -278,7 +278,8 @@ def migrate_sqlite_to_pg(source_db_file):
         raise RuntimeError("DATABASE_URL not set")
     src = sqlite3.connect(source_db_file)
     src.row_factory = sqlite3.Row
-    dst = psycopg.connect(DATABASE_URL, autocommit=True)
+    dst = psycopg2.connect(DATABASE_URL)
+    dst.autocommit = True
     tables = ['listings', 'payments', 'scammers', 'sales_scripts',
               'conversations', 'ai_responses', 'variant_stats',
               'user_profiles', 'learned_patterns', 'withdrawals']
@@ -294,9 +295,11 @@ def migrate_sqlite_to_pg(source_db_file):
             for r in rows:
                 vals = [r[c] for c in cols]
                 try:
-                    dst.execute(f"INSERT INTO {t} ({col_str}) VALUES ({placeholders}) ON CONFLICT DO NOTHING", vals)
+                    cur = dst.cursor()
+                    cur.execute(f"INSERT INTO {t} ({col_str}) VALUES ({placeholders}) ON CONFLICT DO NOTHING", vals)
                 except Exception as e:
                     print(f"  skip {t}: {e}")
+            dst.commit()
             print(f"  {t}: {len(rows)} rows")
         except Exception as e:
             print(f"  {t}: {e}")
