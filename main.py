@@ -45,7 +45,14 @@ from aiogram.types import LabeledPrice, InlineKeyboardMarkup, InlineKeyboardButt
 # Config
 # ============================================================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-WEBAPP_URL = os.getenv("WEBAPP_URL", "https://ibaraholka.p.spru.io/").strip()
+WEBAPP_URL = os.getenv("WEBAPP_URL", "https://ibaraholka.p.spru.io/v6.html").strip()
+# Auto-fix: ensure proper URL format
+if WEBAPP_URL and '://' not in WEBAPP_URL:
+    WEBAPP_URL = 'https://' + WEBAPP_URL
+if WEBAPP_URL and not WEBAPP_URL.endswith('/v6.html') and not WEBAPP_URL.endswith('/'):
+    if 'spru.io' in WEBAPP_URL and 'v6' not in WEBAPP_URL.split('/')[-1]:
+        WEBAPP_URL = WEBAPP_URL.rstrip('/') + '/v6.html'
+print(f'[startup] WEBAPP_URL={WEBAPP_URL}')
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@ibaraholkatyt").strip()
 # Admin token for privileged API operations (delete, publish, etc.)
