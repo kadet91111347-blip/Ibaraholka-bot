@@ -30,15 +30,30 @@ class _PostgresCursor:
     """Cursor compatible with sqlite3 for our patterns."""
     def __init__(self, cursor):
         self._cursor = cursor
-        self._description = cursor.description
-        self._rowcount = cursor.rowcount
+        self._description = None  # set lazily after first execute
+        self._rowcount = -1
 
     @property
     def description(self):
         return self._description
 
     @property
+    def description(self):
+        # Lazy: fetch from underlying cursor (which may be None before first execute)
+        if self._description is None:
+            try:
+                self._description = self._cursor.description
+            except Exception:
+                return None
+        return self._description
+
+    @property
     def rowcount(self):
+        if self._rowcount == -1:
+            try:
+                self._rowcount = self._cursor.rowcount
+            except Exception:
+                return -1
         return self._rowcount
 
     def execute(self, sql, params=None):
@@ -51,6 +66,12 @@ class _PostgresCursor:
                 self._cursor.execute(sql, params)
             else:
                 self._cursor.execute(sql, (params,))
+        # Refresh description after execute
+        try:
+            self._description = self._cursor.description
+            self._rowcount = self._cursor.rowcount
+        except Exception:
+            pass
         return self
 
     def executemany(self, sql, seq):
