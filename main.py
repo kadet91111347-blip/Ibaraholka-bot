@@ -52,6 +52,9 @@ if WEBAPP_URL and '://' not in WEBAPP_URL:
 if WEBAPP_URL and not WEBAPP_URL.endswith('/v6.html') and not WEBAPP_URL.endswith('/'):
     if 'spru.io' in WEBAPP_URL and 'v6' not in WEBAPP_URL.split('/')[-1]:
         WEBAPP_URL = WEBAPP_URL.rstrip('/') + '/v6.html'
+# Fix missing slash between domain and page (e.g. .iov6.html -> .io/v6.html)
+import re as _re_webapp
+WEBAPP_URL = _re_webapp.sub(r'(spru\.io)([^/:])', r'\1/\2', WEBAPP_URL)
 print(f'[startup] WEBAPP_URL={WEBAPP_URL}')
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@ibaraholkatyt").strip()
