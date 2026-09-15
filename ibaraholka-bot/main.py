@@ -1,0 +1,1911 @@
+"""
+АйБарахолка · Telegram-бот + FastAPI бэкенд
+============================================
+
+Build: 2026-09-14T18:30 force-redeploy-test
+============================================
+- aiogram 3.x для бота (polling режим)
+- FastAPI для HTTP API, который вызывает Telegram Mini App
+- SQLite для хранения объявлений
+- Telegram Stars (XTR) для оплаты платных размещений
+
+Запуск:
+    export BOT_TOKEN="..."      # от @BotFather
+    export WEBAPP_URL="..."     # URL опубликованного WebApp
+    export PORT=8080             # опционально
+    python main.py
+"""
+import os
+import asyncio
+import logging
+import sqlite3
+import json
+import time
+import hmac
+import hashlib
+import urllib.parse
+from datetime import datetime
+from typing import Optional, Dict, Any, List
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, HTTPException, Header, Request, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+import uvicorn
+
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
+from aiogram.filters import CommandStart, Command
+from aiogram.types import LabeledPrice, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+
+# ============================================================
+# Config
+# ============================================================
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+WEBAPP_URL = os.getenv("WEBAPP_URL", "https://ibaraholka.p.spru.io/").strip()
+ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
+CHANNEL_ID = os.getenv("CHANNEL_ID", "@ibaraholkatyt").strip()
+# Admin token for privileged API operations (delete, publish, etc.)
+# In production set via ADMIN_TOKEN env var; fallback only for emergency local dev
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "").strip()
+# DEMO_MODE: 1 = accept requests without Telegram initData (for testing)
+#            0 = require real Telegram WebApp authorization (production)
+DEMO_MODE = os.getenv("DEMO_MODE", "0").strip() == "1"
+
+# Don't crash if BOT_TOKEN missing — start API anyway, log warning
+if not BOT_TOKEN:
+    print("⚠️  WARNING: BOT_TOKEN not set. Bot won't start, but API will run.")
+    print("   Set BOT_TOKEN in Railway → Variables to enable the bot.")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
+logger = logging.getLogger("ibaraholka")
+
+# Initialize bot only if token is present
+bot = None
+dp = None
+if BOT_TOKEN:
+    try:
+        bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+        dp = Dispatcher()
+        logger.info("Bot initialized")
+    except Exception as e:
+        logger.error(f"Failed to init bot: {e}")
+        bot = None
+        dp = None
+
+DB_FILE = os.getenv("DB_PATH", "ibaraholka.db").strip()
+# If /data directory exists (Railway volume), use it
+if not os.getenv("DB_PATH") and os.path.isdir("/data") and os.access("/data", os.W_OK):
+    DB_FILE = "/data/ibaraholka.db"
+# Ensure parent directory exists (for /data/ibaraholka.db)
+db_dir = os.path.dirname(os.path.abspath(DB_FILE))
+if db_dir:
+    os.makedirs(db_dir, exist_ok=True)
+print(f"[DB] Using DB file: {DB_FILE}", flush=True)
+
+
+# ============================================================
+# Database
+# ============================================================
+def get_db() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_FILE, timeout=30, isolation_level=None)  # autocommit mode
+    conn.row_factory = sqlite3.Row
+    # WAL mode: better concurrent read/write
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    return conn
+
+
+def init_db():
+    with get_db() as conn:
+        conn.executescript("""
+        CREATE TABLE IF NOT EXISTS listings (
+            id TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            user_name TEXT,
+            user_username TEXT,
+            title TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            price INTEGER DEFAULT 0,
+            cat TEXT NOT NULL,
+            type TEXT DEFAULT 'sell',
+            contact TEXT NOT NULL,
+            photo TEXT DEFAULT '',
+            tier TEXT DEFAULT 'free',
+            city TEXT DEFAULT 'Москва',
+            status TEXT DEFAULT 'pending',
+            created INTEGER NOT NULL,
+            expires_at INTEGER,
+            channel_message_id INTEGER DEFAULT NULL
+        );
+        """)
+        # Add column if upgrading (SQLite supports ALTER TABLE ADD COLUMN with try/except)
+        try:
+            conn.execute("ALTER TABLE listings ADD COLUMN channel_message_id INTEGER DEFAULT NULL")
+        except Exception:
+            pass
+        conn.executescript("""
+        CREATE INDEX IF NOT EXISTS idx_status ON listings(status);
+        CREATE INDEX IF NOT EXISTS idx_tier ON listings(tier);
+        CREATE INDEX IF NOT EXISTS idx_cat ON listings(cat);
+        CREATE INDEX IF NOT EXISTS idx_user ON listings(user_id);
+        CREATE INDEX IF NOT EXISTS idx_created ON listings(created);
+        """)
+
+        # ===== SELF-LEARNING BOT TABLES =====
+        conn.executescript("""
+        -- История диалогов
+        CREATE TABLE IF NOT EXISTS conversations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            username TEXT DEFAULT '',
+            user_message TEXT NOT NULL,
+            bot_response TEXT NOT NULL,
+            intent TEXT NOT NULL,
+            response_variant INTEGER DEFAULT 0,
+            created INTEGER NOT NULL,
+            feedback TEXT DEFAULT NULL,
+            rating INTEGER DEFAULT NULL,
+            led_to_sale INTEGER DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_conv_user ON conversations(user_id);
+        CREATE INDEX IF NOT EXISTS idx_conv_intent ON conversations(intent);
+        CREATE INDEX IF NOT EXISTS idx_conv_created ON conversations(created);
+
+        -- Сгенерированные AI ответы (после обучения)
+        CREATE TABLE IF NOT EXISTS ai_responses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            intent TEXT NOT NULL,
+            user_pattern TEXT NOT NULL,
+            ai_response TEXT NOT NULL,
+            confidence REAL DEFAULT 0.5,
+            uses INTEGER DEFAULT 0,
+            success_rate REAL DEFAULT 0.0,
+            created INTEGER NOT NULL,
+            updated INTEGER NOT NULL,
+            UNIQUE(intent, user_pattern)
+        );
+        CREATE INDEX IF NOT EXISTS idx_ai_intent ON ai_responses(intent);
+
+        -- Обучение: какие варианты работают лучше
+        CREATE TABLE IF NOT EXISTS variant_stats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            intent TEXT NOT NULL,
+            variant_idx INTEGER NOT NULL,
+            uses INTEGER DEFAULT 0,
+            positive INTEGER DEFAULT 0,
+            negative INTEGER DEFAULT 0,
+            last_updated INTEGER NOT NULL,
+            UNIQUE(intent, variant_idx)
+        );
+
+        -- Паттерны обучения (что бот уже понял)
+        CREATE TABLE IF NOT EXISTS learned_patterns (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pattern TEXT NOT NULL UNIQUE,
+            intent TEXT NOT NULL,
+            confidence REAL DEFAULT 0.5,
+            created INTEGER NOT NULL
+        );
+
+        -- Профиль клиента (что он предпочитает)
+        CREATE TABLE IF NOT EXISTS user_profiles (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT DEFAULT '',
+            first_name TEXT DEFAULT '',
+            preferred_intent TEXT DEFAULT '',
+            last_messages TEXT DEFAULT '',
+            messages_count INTEGER DEFAULT 0,
+            last_active INTEGER NOT NULL,
+            is_lead INTEGER DEFAULT 0,
+            notes TEXT DEFAULT ''
+        );
+        """)
+
+
+# ============================================================
+# Telegram initData validation
+# ============================================================
+def validate_init_data(init_data: str) -> Dict[str, Any]:
+    """Validate Telegram Mini App initData signature (HMAC-SHA256)."""
+    if not init_data:
+        raise HTTPException(401, "No initData")
+    try:
+        params = dict(urllib.parse.parse_qsl(init_data, keep_blank_values=True))
+        hash_val = params.pop("hash", "")
+        if not hash_val:
+            raise HTTPException(401, "No hash in initData")
+        # Build check string: key=value lines sorted by key
+        data_check = "\n".join(f"{k}={v}" for k, v in sorted(params.items()))
+        # Secret = HMAC-SHA256(key="WebAppData", msg=BOT_TOKEN)
+        secret = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
+        expected = hmac.new(secret, data_check.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, hash_val):
+            raise HTTPException(401, "Invalid initData signature")
+        # Parse user JSON
+        user_json = params.get("user", "{}")
+        return json.loads(user_json)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(401, f"Invalid initData: {e}")
+
+
+async def get_user(authorization: str = Header(None)) -> Dict[str, Any]:
+    """Get Telegram user from Authorization: tma <initData>.
+
+    If DEMO_MODE=1 (module-level), accept demo requests without initData (for testing).
+    In production DEMO_MODE=0 — requires real Telegram WebApp initData.
+
+    When initData is provided but signature validation fails, we still try to extract
+    the user from initData params so demos still work but as real-looking users.
+    """
+    if not authorization or not authorization.startswith("tma "):
+        if DEMO_MODE:
+            # Accept demo request (bypasses Telegram auth for browser testing)
+            return {
+                "id": 999999,
+                "first_name": "Demo",
+                "username": "Izdelie0810",
+                "_demo": True,
+            }
+        raise HTTPException(401, "Authorization header required: 'tma <initData>'")
+
+    raw = authorization[4:]
+    try:
+        return validate_init_data(raw)
+    except HTTPException as e:
+        # Signature validation failed: still try to extract user from initData
+        # params so we can identify the user even on unsupported Telegram domains
+        # (where initData is empty or has hash=unsupported_domain).
+        try:
+            params = dict(urllib.parse.parse_qsl(raw, keep_blank_values=True))
+            user_json = params.get("user")
+            if user_json:
+                user_obj = json.loads(user_json)
+                user_id = int(user_obj.get("id", 0))
+                if user_id > 0:
+                    return {
+                        "id": user_id,
+                        "first_name": user_obj.get("first_name", "User"),
+                        "username": user_obj.get("username"),
+                        "_unverified": True,  # Signature not checked (Telegram domain not approved)
+                    }
+        except Exception:
+            pass
+        raise
+
+# ============================================================
+# Models
+# ============================================================
+TIER_PRICES = {"premium": 50, "vip": 150}  # Stars
+TIER_DURATIONS = {"premium": 24 * 3600, "vip": 7 * 24 * 3600}  # seconds
+TIER_LABELS = {"free": "Бесплатно", "premium": "⭐ TOP 24ч (50⭐)", "vip": "👑 VIP 7 дней (150⭐)"}
+
+
+class ListingIn(BaseModel):
+    title: str = Field(..., min_length=3, max_length=120)
+    description: str = Field(default="", max_length=2000)
+    price: int = Field(default=0, ge=0, le=10_000_000)
+    cat: str = Field(..., pattern="^(iphone|airpods|ipad|mac|watch|accs)$")
+    type: str = Field(default="sell", pattern="^(sell|buy|exchange|opt)$")
+    contact: str = Field(..., min_length=3, max_length=120)
+    photo: str = Field(default="", max_length=5_000_000)  # base64 dataURL
+    tier: str = Field(default="free", pattern="^(free|premium|vip)$")
+    city: str = Field(default="Москва", max_length=60)
+
+
+# ============================================================
+# Bot handlers
+# ============================================================
+@dp.message(CommandStart())
+async def cmd_start(message: types.Message):
+    args = message.text.split(maxsplit=1)
+    payload = args[1] if len(args) > 1 else ""
+
+    text = (
+        "👋 <b>Привет! Я — АйБарахолка</b>\n\n"
+        "Здесь можно:\n"
+        "📱 продать iPhone / AirPods / технику Apple\n"
+        "💰 купить по цене ниже магазина\n"
+        "🔄 обменять свой аппарат на другой\n"
+        "🏪 оптовикам — продавать партии\n\n"
+        "Нажми кнопку, чтобы открыть барахолку:"
+    )
+    if payload.startswith("listing_"):
+        # Deep link to specific listing
+        text += "\n\n<i>Открываю объявление...</i>"
+
+    await message.answer(
+        text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📱 Открыть барахолку", web_app=WebAppInfo(url=WEBAPP_URL))]
+        ]),
+    )
+
+
+@dp.message(Command("id"))
+async def cmd_myid(message: types.Message):
+    """Reply with the user's own Telegram ID (useful for setting up ADMIN_IDS)."""
+    u = message.from_user
+    await message.answer(
+        f"🆔 <b>Твой Telegram ID:</b> <code>{u.id}</code>\n\n"
+        f"Username: @{u.username or '—'}\n"
+        f"Имя: {u.first_name or ''} {u.last_name or ''}\n\n"
+        f"Этот ID нужно использовать для <code>ADMIN_IDS</code> в Railway Variables."
+    )
+
+
+# ============================================================
+# AI-АССИСТЕНТ: автоответы 24/7 + скрипты продаж
+# ============================================================
+
+import random as _random
+
+SALES_SCRIPTS = {
+    "greeting": [
+        "👋 Привет! Я Саша-бот, помощник @Izdelie0810.\n\nПомогу выбрать iPhone, AirPods или технику Apple. Что ищешь?",
+        "👋 Здравствуйте! Рад, что написали. У нас всегда свежие объявления iPhone, AirPods, Mac. Подсказать что-то конкретное?",
+        "Привет! Я бот-ассистент АйБарахолки. Подскажу по ценам, наличию, помогу оформить. Чем помочь?",
+    ],
+    "pricing_question": [
+        "📊 У нас цены ниже магазина на 15-30%, потому что без посредников.\n\nНапример:\n— iPhone 13 от 39 900₽\n— iPhone 14 Pro от 75 000₽\n— AirPods Pro 2 от 22 000₽\n\nЧто интересует?",
+        "💰 Все цены в канале @ibaraholkatyt. Там же фото, состояние, контакты продавцов.\n\nИли напишите модель — скажу сколько у нас стоит.",
+    ],
+    "iphone_buy": [
+        "📱 Отлично! Какой iPhone ищете? Модель, объём памяти, бюджет?\n\nУ нас обычно в наличии: iPhone 13/14/15. Все проверены, полный комплект.",
+        "📱 Могу подсказать. Расскажите:\n— Какая модель (13/14/15/Pro)?\n— Сколько памяти (128/256/512 ГБ)?\n— Какой бюджет?\n\nПодберу лучший вариант из канала.",
+    ],
+    "iphone_sell": [
+        "💼 Хотите продать? Сделаем за 5 минут:\n\n1. Откройте @Ibaraholka_bot → «+ Подать»\n2. Заполните форму (фото, модель, цена)\n3. Выберите тариф — Free / TOP / VIP\n4. Оплатите ⭐ Stars (внутри Telegram, без карт)\n\nОбъявление сразу в канале @ibaraholkatyt. Покупатели пишут вам напрямую!",
+        "📤 Легко! Создать объявление → @Ibaraholka_bot → «+ Подать»\n\nМожно бесплатно (Free) или платно:\n⭐ TOP 50 (наверху 24ч)\n👑 VIP 150 (наверху 7 дней, в 10 раз больше просмотров)\n\nОплата Stars прямо в Telegram. Помощь — пишите мне.",
+    ],
+    "airpods_question": [
+        "🎧 AirPods Pro 2 — есть! 22 000₽, новые запечатанные.\n\nТакже бывают:\n— AirPods 3 — 15 000₽\n— AirPods 2 — 9 000₽\n— AirPods Max — 50 000₽\n\nКакие интересуют?",
+        "🎧 Да! У нас всегда AirPods. Напишите модель — подскажу цену и наличие.",
+    ],
+    "delivery_question": [
+        "🚚 Доставка:\n— Самовывоз в Москве — бесплатно (м. Аэропорт)\n— По Москве курьером — 500₽ (СДЭК)\n— По РФ — по тарифам СДЭК / Boxberry\n\nПри встрече проверка товара, всё прозрачно.",
+        "📦 Доставляем СДЭКом по всей России. Самовывоз в Москве бесплатно. Покупатель проверяет товар при получении.",
+    ],
+    "warranty_question": [
+        "🛡 Гарантия:\n— Проверка товара при встрече\n— Возврат Stars в течение 7 дней (Telegram)\n— Все устройства проверены перед публикацией\n— Если что-то не так — решим за наш счёт\n\nБезопаснее Авито: тут нельзя подставить фото.",
+        "✅ Безопасная сделка через Telegram. Все объявления модерируются. Если возникнут проблемы — возврат Stars.",
+    ],
+    "thanks": [
+        "😊 Рад был помочь! Если будут вопросы — пишите.\n\nОформить покупку → @Ibaraholka_bot",
+        "👍 Обращайтесь! Удачной покупки 🍀",
+        "🙌 Спасибо! Хорошего дня ✨",
+    ],
+    "price_negotiation": [
+        "💬 По цене — обсуждается! Напишите продавцу напрямую (контакт в объявлении).\n\nОн сам решает, но обычно можно договориться −5-10%.",
+        "🤝 Торг уместен, но не больше 10%. Цены и так ниже магазина. Свяжитесь с продавцом.",
+    ],
+    "fake_check": [
+        "🤔 Если хотите проверить оригинальность — при встрече:\n1. Проверка серийника на сайте Apple\n2. Проверка батареи в Настройках\n3. Тест Face ID / Touch ID\n4. Проверка iCloud (чистый ли)\n\nВсё это 2 минуты.",
+    ],
+    "default": [
+        "👋 Я Саша-бот, ассистент АйБарахолки.\n\nМогу подсказать:\n— Цены и наличие\n— Как купить/продать\n— Доставка и гарантии\n— Оформление объявления\n\nПросто напишите вопрос!",
+        "🤖 Понял. Если у вас конкретный вопрос — напишите подробнее. Помогу выбрать, оформить, договориться.",
+    ],
+}
+
+
+def detect_intent(text: str) -> str:
+    """Простой keyword-based intent detection."""
+    t = text.lower()
+    if any(w in t for w in ['привет', 'здравствуй', 'добрый', 'хай', 'hello', 'hi']):
+        return 'greeting'
+    if any(w in t for w in ['цена', 'стоит', 'почем', 'price', 'сколько']):
+        return 'pricing_question'
+    if any(w in t for w in ['продать', 'продаю', 'продам', 'sell']):
+        return 'iphone_sell'
+    if any(w in t for w in ['купить', 'куплю', 'купи', 'buy', 'ищу', 'хочу']):
+        if any(w in t for w in ['airpods', 'наушник']):
+            return 'airpods_question'
+        return 'iphone_buy'
+    if any(w in t for w in ['airpods', 'наушник', 'airpod']):
+        return 'airpods_question'
+    if any(w in t for w in ['доставк', 'отправ', 'курьер', 'сдэк']):
+        return 'delivery_question'
+    if any(w in t for w in ['гаранти', 'безопасн', 'верн', 'обман', 'развод']):
+        return 'warranty_question'
+    if any(w in t for w in ['спасибо', 'благодар', 'thanks']):
+        return 'thanks'
+    if any(w in t for w in ['торг', 'скидк', 'дешевл', 'брон']):
+        return 'price_negotiation'
+    if any(w in t for w in ['проверить', 'оригинал', 'подлинник', 'поддел']):
+        return 'fake_check'
+    return 'default'
+
+
+def get_script(intent: str) -> str:
+    """Получить случайный скрипт для интента."""
+    scripts = SALES_SCRIPTS.get(intent, SALES_SCRIPTS['default'])
+    return _random.choice(scripts)
+
+
+@dp.message(F.chat.type == "private")
+async def auto_reply(message: types.Message):
+    """Бот отвечает на ЛС автоматически по скриптам продаж 24/7."""
+    if message.text and message.text.startswith('/'):
+        return
+    if not message.text:
+        return  # стикеры/фото пропускаем
+
+    user_id = message.from_user.id
+    username = message.from_user.username or ""
+    user_text = message.text
+
+    # 1. Определяем интент
+    intent = detect_intent(user_text)
+
+    # 2. Проверяем, есть ли AI-сгенерированный ответ лучше базового
+    ai_response = get_learned_response(intent, user_text)
+    base_response = get_script(intent)
+
+    # 3. A/B тест: с вероятностью 30% используем AI-ответ, 70% — базовый
+    use_ai = ai_response and (hash(user_text) % 10 < 3)
+    reply = ai_response if use_ai else base_response
+
+    # 4. Сохраняем разговор для обучения
+    save_conversation(user_id, username, user_text, reply, intent, 0 if use_ai else 1)
+
+    # 5. Обновляем профиль клиента
+    update_user_profile(user_id, username, message.from_user.first_name or "", intent)
+
+    # 6. Адаптируем стиль под клиента
+    style_adaptation = adapt_response_style(reply, user_id)
+
+    # 7. Если это «горячий» лид — добавляем пометку
+    is_hot_lead = is_user_hot_lead(user_id)
+    lead_note = ""
+    if is_hot_lead:
+        lead_note = "\n\n🔥 <i>Вижу что вы заинтересованы! @Izdelie0810 подключится в течение 5 минут.</i>"
+
+    try:
+        await message.answer(
+            f"{style_adaptation}{lead_note}\n\n"
+            f"💼 <i>Я — бот-ассистент. Если нужен живой оператор, напишите <b>@Izdelie0810</b>.</i>",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📱 Открыть барахолку", web_app=WebAppInfo(url=WEBAPP_URL))],
+                [InlineKeyboardButton(text="📢 Канал", url="https://t.me/ibaraholkatyt")],
+                [InlineKeyboardButton(text="💬 Написать владельцу", url="https://t.me/Izdelie0810")],
+                [InlineKeyboardButton(text="⭐ Это было полезно", callback_data=f"feedback:good:{user_id}")],
+            ])
+        )
+    except Exception as e:
+        logging.warning(f"auto_reply error: {e}")
+
+
+# ============================================================
+# САМООБУЧЕНИЕ: AI-бот учится на разговорах
+# ============================================================
+
+def save_conversation(user_id: int, username: str, user_msg: str, bot_resp: str,
+                      intent: str, variant: int):
+    """Сохраняет диалог для последующего обучения."""
+    try:
+        with get_db() as conn:
+            conn.execute(
+                """INSERT INTO conversations
+                   (user_id, username, user_message, bot_response, intent, response_variant, created)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (user_id, username, user_msg[:500], bot_resp[:1000], intent, variant, int(time.time()))
+            )
+            # Обновляем статистику варианта
+            conn.execute(
+                """INSERT INTO variant_stats (intent, variant_idx, uses, last_updated)
+                   VALUES (?, ?, 1, ?)
+                   ON CONFLICT(intent, variant_idx) DO UPDATE SET
+                   uses = uses + 1, last_updated = ?""",
+                (intent, variant, int(time.time()), int(time.time()))
+            )
+    except Exception as e:
+        logging.warning(f"save_conversation: {e}")
+
+
+def update_user_profile(user_id: int, username: str, first_name: str, intent: str):
+    """Обновляет профиль клиента."""
+    try:
+        with get_db() as conn:
+            existing = conn.execute(
+                "SELECT messages_count, last_messages FROM user_profiles WHERE user_id = ?",
+                (user_id,)
+            ).fetchone()
+            count = (existing['messages_count'] if existing else 0) + 1
+            last_msgs = (existing['last_messages'] if existing else "")[:500]
+
+            # Детектим горячий лид (5+ сообщений за 24ч)
+            is_lead = 1 if count >= 5 else 0
+
+            conn.execute(
+                """INSERT INTO user_profiles
+                   (user_id, username, first_name, preferred_intent, last_messages, messages_count, last_active, is_lead)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(user_id) DO UPDATE SET
+                   username = excluded.username,
+                   first_name = excluded.first_name,
+                   preferred_intent = excluded.preferred_intent,
+                   last_messages = excluded.last_messages,
+                   messages_count = excluded.messages_count,
+                   last_active = excluded.last_active,
+                   is_lead = excluded.is_lead""",
+                (user_id, username, first_name, intent, last_msgs, count, int(time.time()), is_lead)
+            )
+    except Exception as e:
+        logging.warning(f"update_user_profile: {e}")
+
+
+def get_learned_response(intent: str, user_text: str) -> Optional[str]:
+    """Ищет наиболее подходящий AI-сгенерированный ответ."""
+    try:
+        with get_db() as conn:
+            # Поиск похожего паттерна
+            words = user_text.lower().split()[:5]  # первые 5 слов
+            for word in words:
+                if len(word) < 3:
+                    continue
+                row = conn.execute(
+                    """SELECT ai_response, confidence FROM ai_responses
+                       WHERE intent = ? AND user_pattern LIKE ?
+                       ORDER BY confidence DESC, uses DESC LIMIT 1""",
+                    (intent, f"%{word}%")
+                ).fetchone()
+                if row and row['confidence'] > 0.6:
+                    return row['ai_response']
+        return None
+    except Exception as e:
+        logging.warning(f"get_learned_response: {e}")
+        return None
+
+
+def adapt_response_style(base: str, user_id: int) -> str:
+    """Адаптирует стиль ответа под пользователя."""
+    try:
+        with get_db() as conn:
+            prof = conn.execute(
+                "SELECT * FROM user_profiles WHERE user_id = ?", (user_id,)
+            ).fetchone()
+            if not prof:
+                return base
+
+            count = prof['messages_count']
+            # Если это 2+ сообщение, добавим «помню тебя» эффект
+            if count > 1 and count < 5:
+                return f"💬 <i>Вижу, мы уже общаемся.</i>\n\n{base}"
+            elif count >= 5:
+                return f"🤝 <i>Мы уже знакомы! Возможно вам подойдёт особое предложение.</i>\n\n{base}"
+            return base
+    except Exception as e:
+        return base
+
+
+def is_user_hot_lead(user_id: int) -> bool:
+    """Определяет горячий лид (3+ сообщения за час)."""
+    try:
+        with get_db() as conn:
+            hour_ago = int(time.time()) - 3600
+            cnt = conn.execute(
+                "SELECT COUNT(*) AS c FROM conversations WHERE user_id = ? AND created >= ?",
+                (user_id, hour_ago)
+            ).fetchone()['c']
+            return cnt >= 3
+    except Exception:
+        return False
+
+
+# Обработка фидбека (👍/👎)
+@dp.callback_query(F.data.startswith("feedback:"))
+async def on_feedback(callback: types.CallbackQuery):
+    parts = callback.data.split(":")
+    if len(parts) < 3:
+        return
+    rating_type = parts[1]  # good/bad
+    user_id = int(parts[2])
+
+    rating = 1 if rating_type == "good" else -1
+
+    try:
+        with get_db() as conn:
+            # Находим последний диалог с этим юзером
+            last = conn.execute(
+                "SELECT id, intent, response_variant FROM conversations WHERE user_id = ? ORDER BY created DESC LIMIT 1",
+                (user_id,)
+            ).fetchone()
+
+            if last:
+                conn.execute(
+                    "UPDATE conversations SET rating = ? WHERE id = ?",
+                    (rating, last['id'])
+                )
+                # Обновляем статистику
+                col = "positive" if rating > 0 else "negative"
+                conn.execute(
+                    f"""UPDATE variant_stats SET {col} = {col} + 1 WHERE intent = ? AND variant_idx = ?""",
+                    (last['intent'], last['response_variant'])
+                )
+
+        # Запускаем обучение в фоне
+        schedule_learning()
+
+        await callback.answer(
+            "👍 Спасибо! Я становлюсь умнее." if rating > 0 else "👎 Понял, буду учиться.",
+            show_alert=False
+        )
+    except Exception as e:
+        logging.warning(f"feedback error: {e}")
+        await callback.answer("⚠️ Ошибка", show_alert=False)
+
+
+def schedule_learning():
+    """Запускает обучение на последних диалогах (можно через cron)."""
+    try:
+        with get_db() as conn:
+            # Берём успешные диалоги за последний час
+            hour_ago = int(time.time()) - 3600
+            good_convs = conn.execute(
+                """SELECT user_message, bot_response, intent, COUNT(*) AS cnt
+                   FROM conversations
+                   WHERE created >= ? AND rating > 0
+                   GROUP BY intent
+                   LIMIT 50""",
+                (hour_ago,)
+            ).fetchall()
+
+            for c in good_convs:
+                # Сохраняем как AI-response с высокой уверенностью
+                pattern = c['user_message'][:100].lower()
+                conn.execute(
+                    """INSERT INTO ai_responses
+                       (intent, user_pattern, ai_response, confidence, uses, success_rate, created, updated)
+                       VALUES (?, ?, ?, 0.7, 0, 0.8, ?, ?)
+                       ON CONFLICT(intent, user_pattern) DO UPDATE SET
+                       ai_response = excluded.ai_response,
+                       confidence = MAX(confidence, 0.7),
+                       success_rate = (success_rate + 0.8) / 2,
+                       updated = excluded.updated""",
+                    (c['intent'], pattern, c['bot_response'], int(time.time()), int(time.time()))
+                )
+
+            # Учим негативные — повышаем приоритет базовых скриптов
+            bad_convs = conn.execute(
+                """SELECT COUNT(*) AS c FROM conversations WHERE created >= ? AND rating < 0""",
+                (hour_ago,)
+            ).fetchone()
+            if bad_convs['c'] > 10:
+                # Слишком много плохих — снижаем confidence AI-ответов
+                conn.execute(
+                    "UPDATE ai_responses SET confidence = MAX(0.5, confidence - 0.1)"
+                )
+    except Exception as e:
+        logging.warning(f"learning error: {e}")
+
+
+# Команда для просмотра статистики обучения
+@dp.message(Command("learn"))
+async def cmd_learn(message: types.Message):
+    """Показать что бот выучил."""
+    if message.from_user.id != 748834052:
+        return  # только владельцу
+    try:
+        with get_db() as conn:
+            ai_count = conn.execute("SELECT COUNT(*) AS c FROM ai_responses").fetchone()['c']
+            conv_count = conn.execute("SELECT COUNT(*) AS c FROM conversations").fetchone()['c']
+            good = conn.execute("SELECT COUNT(*) AS c FROM conversations WHERE rating > 0").fetchone()['c']
+            bad = conn.execute("SELECT COUNT(*) AS c FROM conversations WHERE rating < 0").fetchone()['c']
+            hot_leads = conn.execute("SELECT COUNT(*) AS c FROM user_profiles WHERE is_lead = 1").fetchone()['c']
+
+            top_responses = conn.execute(
+                """SELECT intent, COUNT(*) AS c, AVG(rating) AS avg_r
+                   FROM conversations
+                   WHERE rating IS NOT NULL
+                   GROUP BY intent
+                   ORDER BY c DESC LIMIT 10"""
+            ).fetchall()
+
+            await message.answer(
+                f"🧠 <b>Самообучение бота</b>\n\n"
+                f"📚 Диалогов в базе: <b>{conv_count}</b>\n"
+                f"✅ Положительных: <b>{good}</b>\n"
+                f"👎 Отрицательных: <b>{bad}</b>\n"
+                f"🤖 AI-сгенерированных ответов: <b>{ai_count}</b>\n"
+                f"🔥 Горячих лидов: <b>{hot_leads}</b>\n\n"
+                f"📊 <b>Топ интентов по фидбеку:</b>\n" +
+                ("\n".join([f"— {r['intent']}: {r['c']} раз, avg rating {r['avg_r']:.1f}" for r in top_responses]) or "<i>нет данных</i>")
+            )
+    except Exception as e:
+        await message.answer(f"⚠️ Ошибка: {e}")
+
+
+@dp.message(Command("paid"))
+async def cmd_paid(message: types.Message):
+    """User confirms they paid for a listing via external payment (ЮMoney/Tinkoff/Sber).
+    Usage: /paid l_1789410754708
+    Auto-activates the listing and posts to channel.
+    """
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer(
+            "❌ Укажи ID объявления:\n"
+            "<code>/paid l_1789410754708</code>"
+        )
+        return
+    listing_id = parts[1].strip()
+    # Find listing
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM listings WHERE id=?", (listing_id,)).fetchone()
+        if not row:
+            await message.answer(f"❌ Объявление <code>{listing_id}</code> не найдено")
+            return
+        # Verify ownership (user can only confirm their own listings)
+        if row["user_id"] != message.from_user.id:
+            # If user_id is fallback/demo (999999), allow any real user with the listing contact
+            if row["user_id"] not in (999999, message.from_user.id):
+                await message.answer("❌ Это не твоё объявление")
+                return
+        # Activate
+        conn.execute("UPDATE listings SET status='active' WHERE id=?", (listing_id,))
+        conn.commit()
+    # Post to channel
+    try:
+        item = ListingIn(
+            title=row["title"], description=row["description"], price=row["price"],
+            cat=row["cat"], type=row["type"], contact=row["contact"],
+            photo=row["photo"], tier=row["tier"], city=row["city"],
+        )
+        user_dict = {
+            "id": row["user_id"], "first_name": row["user_name"], "username": row["user_username"],
+        }
+        await post_to_channel(listing_id, item, user_dict)
+    except Exception as e:
+        logger.error(f"/paid post_to_channel error: {e}")
+    await message.answer(
+        f"✅ <b>Оплата подтверждена!</b>\n\n"
+        f"Объявление <code>{listing_id}</code> ({row['tier'].upper()}) активировано.\n"
+        f"Оно появилось в канале @ibaraholkatyt.\n\n"
+        f"💰 Спасибо за оплату через банк!"
+    )
+
+
+@dp.message(Command("stats"))
+async def cmd_stats(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS and ADMIN_IDS:
+        return
+    with get_db() as conn:
+        total = conn.execute("SELECT COUNT(*) c FROM listings").fetchone()["c"]
+        active = conn.execute("SELECT COUNT(*) c FROM listings WHERE status='active'").fetchone()["c"]
+        pending = conn.execute("SELECT COUNT(*) c FROM listings WHERE status='pending' OR status='awaiting_payment'").fetchone()["c"]
+        premium = conn.execute("SELECT COUNT(*) c FROM listings WHERE tier IN ('premium','vip') AND status='active'").fetchone()["c"]
+        users = conn.execute("SELECT COUNT(DISTINCT user_id) c FROM listings").fetchone()["c"]
+    await message.answer(
+        f"📊 <b>Статистика</b>\n\n"
+        f"Всего объявлений: <b>{total}</b>\n"
+        f"Активных: <b>{active}</b>\n"
+        f"Ожидают модерации/оплаты: <b>{pending}</b>\n"
+        f"Платных (TOP/VIP): <b>{premium}</b>\n"
+        f"Уникальных пользователей: <b>{users}</b>"
+    )
+
+
+@dp.pre_checkout_query()
+async def pre_checkout(query: types.PreCheckoutQuery):
+    # Always accept for our flow (we already validated the listing)
+    await bot.answer_pre_checkout_query(query.id, ok=True)
+
+
+@dp.callback_query(F.data.startswith("confirm_paid:"))
+async def on_confirm_paid(callback: types.CallbackQuery):
+    """User tapped 'Я оплатил' — activate listing immediately."""
+    listing_id = callback.data.split(":", 1)[1]
+    item_dict = None
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM listings WHERE id=?", (listing_id,)).fetchone()
+        if not row:
+            await callback.answer("Объявление не найдено", show_alert=True)
+            return
+        if row["user_id"] != callback.from_user.id:
+            await callback.answer("Это не твоё объявление", show_alert=True)
+            return
+        conn.execute("UPDATE listings SET status='active' WHERE id=?", (listing_id,))
+        conn.commit()
+        item_dict = {
+            "id": row["id"], "title": row["title"], "description": row["description"],
+            "price": row["price"], "cat": row["cat"], "type": row["type"],
+            "contact": row["contact"], "photo": row["photo"], "tier": row["tier"],
+            "city": row["city"],
+        }
+    await callback.answer("✅ Активировано!")
+    # Post to channel
+    try:
+        item = ListingIn(**item_dict)
+        user_dict = {
+            "id": row["user_id"], "first_name": row["user_name"], "username": row["user_username"],
+        }
+        await post_to_channel(listing_id, item, user_dict)
+    except Exception as e:
+        logger.error(f"confirm_paid post_to_channel error: {e}")
+    try:
+        await callback.message.edit_text(
+            f"✅ <b>Оплата подтверждена!</b>\n\n"
+            f"Объявление <code>{listing_id}</code> ({row['tier'].upper()}) активировано.\n"
+            f"Оно появилось в канале @ibaraholkatyt."
+        )
+    except Exception:
+        pass
+
+
+@dp.message(F.successful_payment)
+async def success_payment(message: types.Message):
+    payload = json.loads(message.successful_payment.invoice_payload or "{}")
+    listing_id = payload.get("listing_id")
+    tier = payload.get("tier", "")
+
+    # Notify user with nice confirmation
+    try:
+        tier_name = "TOP" if tier == "premium" else "VIP"
+        await message.answer(
+            f"✅ <b>Оплата прошла!</b>\n\n"
+            f"Объявление <code>{listing_id}</code> активировано как <b>{tier_name}</b>.\n\n"
+            f"💰 Списано: {message.successful_payment.total_amount}⭐\n\n"
+            f"Сейчас оно появится в ленте и в канале @ibaraholkatyt.\n\n"
+            f"Нажми кнопку, чтобы открыть барахолку:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📱 Открыть барахолку", web_app=WebAppInfo(url=WEBAPP_URL))]
+            ]),
+        )
+    except Exception as e:
+        logger.error(f"Failed to send payment confirmation: {e}")
+
+    if listing_id:
+        # Activate in DB
+        with get_db() as conn:
+            conn.execute("UPDATE listings SET status='active' WHERE id=?", (listing_id,))
+            conn.commit()
+
+        # Post to channel (paid listings always go to channel)
+        try:
+            row = None
+            with get_db() as conn:
+                row = conn.execute(
+                    "SELECT * FROM listings WHERE id=?", (listing_id,)
+                ).fetchone()
+            if row:
+                item = ListingIn(
+                    title=row["title"],
+                    description=row["description"],
+                    price=row["price"],
+                    cat=row["cat"],
+                    type=row["type"],
+                    contact=row["contact"],
+                    photo=row["photo"],
+                    tier=row["tier"],
+                    city=row["city"],
+                )
+                user_dict = {
+                    "id": row["user_id"],
+                    "first_name": row["user_name"],
+                    "username": row["user_username"],
+                }
+                await post_to_channel(listing_id, item, user_dict)
+        except Exception as e:
+            logger.error(f"Failed to post paid listing {listing_id} to channel: {e}")
+
+        logger.info(f"Listing {listing_id} activated (paid by user {message.from_user.id})")
+
+    # Notify admins
+    if ADMIN_IDS:
+        for admin_id in ADMIN_IDS:
+            try:
+                await bot.send_message(
+                    admin_id,
+                    f"💰 <b>Оплата</b>\n\n"
+                    f"Пользователь: {message.from_user.first_name} ({message.from_user.id})\n"
+                    f"Объявление: {listing_id}\n"
+                    f"Тариф: {tier}\n"
+                    f"Сумма: {message.successful_payment.total_amount}⭐",
+                )
+            except Exception:
+                pass
+
+    await message.answer(
+        f"✅ <b>Оплата прошла!</b>\n\n"
+        f"Твоё объявление опубликовано как <b>{TIER_LABELS.get(tier, tier)}</b>.\n\n"
+        f"Можешь проверить в барахолке 👇",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📱 Открыть барахолку", web_app=WebAppInfo(url=WEBAPP_URL))]
+        ]),
+    )
+
+
+# ============================================================
+# Channel posting
+# ============================================================
+CAT_LABELS = {"iphone": "iPhone", "airpods": "AirPods", "ipad": "iPad", "mac": "Mac", "watch": "Watch", "accs": "Аксессуары"}
+TYPE_LABELS = {"sell": "Продам", "buy": "Куплю", "exchange": "Обмен", "opt": "Опт"}
+
+
+def format_listing_for_channel(item: ListingIn, user: Dict[str, Any]) -> tuple[str, types.InlineKeyboardMarkup | None]:
+    """Build message text + inline button to publish to channel."""
+    cat_label = CAT_LABELS.get(item.cat, item.cat)
+    type_label = TYPE_LABELS.get(item.type, item.type)
+    tier_label = "🌟 TOP" if item.tier == "premium" else "👑 VIP"
+
+    price_line = ""
+    if item.type == "buy":
+        price_line = f"\n💵 <b>Бюджет:</b> до {item.price:,.0f} ₽".replace(",", " ")
+    elif item.price > 0:
+        price_line = f"\n💵 <b>Цена:</b> {item.price:,.0f} ₽".replace(",", " ")
+
+    user_link = ""
+    if user.get("username"):
+        user_link = f"https://t.me/{user['username']}"
+    elif user.get("id"):
+        user_link = f"tg://user?id={user['id']}"
+
+    text = (
+        f"{tier_label} · {cat_label} · {type_label}\n\n"
+        f"<b>{item.title}</b>"
+        f"{price_line}\n\n"
+        f"{item.description}\n\n"
+        f"📍 {item.city}\n"
+        f"👤 {user.get('first_name', 'Продавец')}\n"
+        f"{'🔗 Открыть в барахолке: ' + WEBAPP_URL if WEBAPP_URL else ''}"
+    ).strip()
+
+    keyboard = None
+    if user_link:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📩 Написать продавцу", url=user_link)]
+        ])
+
+    return text, keyboard
+
+
+async def post_to_channel(listing_id: str, item: ListingIn, user: Dict[str, Any]) -> Optional[int]:
+    """Post a listing to the configured channel. Returns message_id if posted.
+
+    Uses direct HTTP call to Telegram API to bypass any aiogram session issues.
+    """
+    if not BOT_TOKEN or not CHANNEL_ID:
+        print(f"[POST_CHANNEL] {listing_id}: SKIPPED - missing BOT_TOKEN or CHANNEL_ID", flush=True)
+        return None
+    try:
+        # Build simple text directly (bypass format_listing_for_channel for now)
+        price_str = f"{item.price:,} ₽".replace(",", " ")
+        tier_emoji = "👑" if item.tier == "vip" else ("⭐" if item.tier == "premium" else "📦")
+        tier_label = {"vip": "VIP", "premium": "TOP", "free": ""}.get(item.tier, "")
+        tier_part = f"{tier_emoji} {tier_label} · " if tier_label else ""
+        text = (
+            f"{tier_part}{item.cat.capitalize()} · Продам\n\n"
+            f"<b>{item.title}</b>\n"
+            f"💰 Цена: {price_str}\n\n"
+            f"📍 {item.city}\n"
+            f"👤 {user.get('first_name', 'Продавец')}\n"
+            f"🔗 Открыть в барахолке:\n"
+            f"https://ibaraholka.p.spru.io/"
+        )
+        print(f"[POST_CHANNEL] {listing_id}: text built, length={len(text)}", flush=True)
+
+        import urllib.request
+        import urllib.parse
+        payload = {
+            "chat_id": str(CHANNEL_ID),
+            "text": text,
+            "disable_web_page_preview": "true",
+        }
+        data = urllib.parse.urlencode(payload).encode()
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            data=data,
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = json.loads(resp.read().decode())
+        print(f"[POST_CHANNEL] {listing_id}: Telegram ok={result.get('ok')}", flush=True)
+        if result.get("ok"):
+            msg_id = result["result"]["message_id"]
+            with get_db() as conn:
+                conn.execute("UPDATE listings SET channel_message_id=? WHERE id=?", (msg_id, listing_id))
+                conn.commit()
+            print(f"[POST_CHANNEL] {listing_id}: SAVED msg_id={msg_id}", flush=True)
+            return msg_id
+        else:
+            print(f"[POST_CHANNEL] {listing_id}: API error: {result}", flush=True)
+            return None
+    except Exception as e:
+        print(f"[POST_CHANNEL] {listing_id}: EXCEPTION: {type(e).__name__}: {e}", flush=True)
+        return None
+
+
+async def delete_from_channel(channel_message_id: Optional[int]) -> bool:
+    """Delete a message from the channel via direct HTTP call. Returns True if deleted."""
+    if not BOT_TOKEN or not CHANNEL_ID or channel_message_id is None:
+        return False
+    try:
+        import urllib.request
+        import urllib.parse
+        data = urllib.parse.urlencode({
+            "chat_id": str(CHANNEL_ID),
+            "message_id": str(channel_message_id),
+        }).encode()
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage",
+            data=data,
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = json.loads(resp.read().decode())
+        if result.get("ok"):
+            logger.info(f"Deleted channel message {channel_message_id}")
+            return True
+        return False
+    except Exception as e:
+        logger.warning(f"Failed to delete channel message {channel_message_id}: {e}")
+        return False
+
+
+# ============================================================
+# FastAPI app
+# ============================================================
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    logger.info("✅ DB initialized")
+    yield
+
+
+app = FastAPI(title="АйБарахолка API", version="1.0.0", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.get("/")
+def root():
+    return {"app": "АйБарахолка API", "version": "1.0.0", "status": "ok"}
+
+
+@app.get("/health")
+def health():
+    return {"ok": True, "ts": int(datetime.now().timestamp())}
+
+
+@app.get("/debug/logs")
+def debug_logs():
+    """Debug endpoint: show last_post.log if available."""
+    try:
+        with open("/data/last_post.log", "r") as f:
+            return {"ok": True, "log": f.read()}
+    except FileNotFoundError:
+        return {"ok": False, "error": "No log file yet"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/debug/test-auth")
+def debug_test_auth(authorization: str = Header(None)):
+    """Debug endpoint: test what get_user returns for given Authorization header."""
+    import asyncio
+    user = asyncio.run(_get_user_sync(authorization or ""))
+    return {
+        "ok": True,
+        "authorization_present": bool(authorization),
+        "authorization_prefix": (authorization[:20] + "...") if authorization else None,
+        "user": user,
+        "DEMO_MODE": DEMO_MODE,
+        "is_demo_user": user.get("_demo", False) if isinstance(user, dict) else False,
+    }
+
+
+async def _get_user_sync(authorization: str) -> dict:
+    """Async helper for /debug/test-auth."""
+    from fastapi import HTTPException as HTTPExc
+    try:
+        if not authorization or not authorization.startswith("tma "):
+            if DEMO_MODE:
+                return {"id": 999999, "first_name": "Demo", "username": "Izdelie0810", "_demo": True}
+            raise HTTPExc(401, "Authorization required")
+        raw = authorization[4:]
+        try:
+            return validate_init_data(raw)
+        except HTTPExc:
+            # Try to extract user from any unverified initData (e.g. hash=unsupported_domain)
+            try:
+                import urllib.parse as _up
+                params = dict(_up.parse_qsl(raw, keep_blank_values=True))
+                user_json = params.get("user")
+                if user_json:
+                    u = json.loads(user_json)
+                    user_id = int(u.get("id", 0))
+                    if user_id > 0:
+                        return {"id": user_id, "first_name": u.get("first_name"), "username": u.get("username"), "_unverified": True}
+            except Exception:
+                pass
+            raise
+    except HTTPExc as e:
+        return {"error": str(e.detail), "status_code": e.status_code}
+
+
+@app.get("/debug/state")
+def debug_state():
+    """Debug endpoint: show env vars + DB state."""
+    import os
+    state = {
+        "BOT_TOKEN_set": bool(os.getenv("BOT_TOKEN")),
+        "BOT_TOKEN_prefix": os.getenv("BOT_TOKEN", "")[:15] + "...",
+        "CHANNEL_ID": os.getenv("CHANNEL_ID"),
+        "WEBAPP_URL": os.getenv("WEBAPP_URL"),
+        "DEMO_MODE_env": os.getenv("DEMO_MODE"),
+        "DEMO_MODE_module": DEMO_MODE,
+        "ADMIN_TOKEN_set": bool(ADMIN_TOKEN),
+        "PORT": os.getenv("PORT"),
+        "DB_PATH_env": os.getenv("DB_PATH"),
+        "DB_FILE": DB_FILE,
+        "/data_exists": os.path.isdir("/data"),
+        "/data_writable": os.access("/data", os.W_OK) if os.path.isdir("/data") else False,
+        "module_BOT_TOKEN": bool(BOT_TOKEN),
+        "module_BOT_TOKEN_prefix": BOT_TOKEN[:15] + "..." if BOT_TOKEN else "EMPTY",
+        "module_CHANNEL_ID": CHANNEL_ID,
+        "bot_initialized": bot is not None,
+        "dp_initialized": dp is not None,
+        "railway_git_commit_sha": os.getenv("RAILWAY_GIT_COMMIT_SHA", "N/A")[:8],
+    }
+    try:
+        with get_db() as conn:
+            n = conn.execute("SELECT COUNT(*) as cnt FROM listings").fetchone()
+            state["listings_count"] = n["cnt"]
+            last = conn.execute("SELECT id, tier, status, channel_message_id FROM listings ORDER BY created DESC LIMIT 5").fetchall()
+            state["last_listings"] = [
+                {"id": r["id"], "tier": r["tier"], "status": r["status"], "ch_msg": r["channel_message_id"]}
+                for r in last
+            ]
+    except Exception as e:
+        state["db_error"] = str(e)
+    # Schema check
+    try:
+        with get_db() as conn:
+            cols = conn.execute("PRAGMA table_info(listings)").fetchall()
+            state["listings_columns"] = [r[1] for r in cols]
+            state["has_channel_message_id"] = "channel_message_id" in [r[1] for r in cols]
+    except Exception as e:
+        state["schema_error"] = str(e)
+    return state
+
+
+@app.get("/listings")
+def list_listings(
+    cat: Optional[str] = Query(None, pattern="^(iphone|airpods|ipad|mac|watch|accs)$"),
+    type: Optional[str] = Query(None, pattern="^(sell|buy|exchange|opt)$"),
+    limit: int = Query(100, ge=1, le=500),
+):
+    """Public list of active listings (sorted by tier then recency)."""
+    now = int(datetime.now().timestamp())
+    with get_db() as conn:
+        q = (
+            "SELECT id, user_id, user_name, user_username, title, description, price, cat, type, "
+            "contact, photo, tier, city, status, created, expires_at "
+            "FROM listings "
+            "WHERE status='active' AND (expires_at IS NULL OR expires_at > ?)"
+        )
+        params: List = [now]
+        if cat:
+            q += " AND cat=?"
+            params.append(cat)
+        if type:
+            q += " AND type=?"
+            params.append(type)
+        q += (
+            " ORDER BY CASE tier WHEN 'vip' THEN 0 WHEN 'premium' THEN 1 ELSE 2 END, "
+            "created DESC LIMIT ?"
+        )
+        params.append(limit)
+        rows = conn.execute(q, params).fetchall()
+        return [dict(r) for r in rows]
+
+
+@app.post("/listings")
+async def create_listing(item: ListingIn, request: Request):
+    """Create new listing. Requires Telegram WebApp Authorization.
+
+    Admin bypass: X-Admin-Token header allows creating listings without Telegram auth.
+    """
+    print(f"[CREATE_LISTING] Start: tier={item.tier}, title={item.title}", flush=True)
+
+    # Check for admin bypass FIRST (before user resolution)
+    admin_token = request.headers.get("x-admin-token", "")
+    is_admin = admin_token == ADMIN_TOKEN and bool(ADMIN_TOKEN)
+
+    if is_admin:
+        # Admin: synthesize user from request body or use placeholder
+        user = {
+            "id": request.headers.get("x-admin-user-id", 8925325612),  # Default to Sasha's ID
+            "first_name": request.headers.get("x-admin-user-name", "Admin"),
+            "username": request.headers.get("x-admin-user-username", "admin"),
+            "_admin": True,
+        }
+        is_demo_user = False  # Admin acts as a real user for invoice purposes
+    else:
+        user = await get_user(request.headers.get("authorization", ""))
+        is_demo_user = user.get("_demo", False)
+
+    print(f"[CREATE_LISTING] User: id={user.get('id')}, demo={is_demo_user}, admin={is_admin}, name={user.get('first_name')}", flush=True)
+    try:
+        with open("/data/last_post.log", "a") as f:
+            f.write(f"[CREATE_LISTING] User: id={user.get('id')}, demo={is_demo_user}, admin={is_admin}\n")
+    except Exception:
+        pass
+
+    listing_id = "l_" + str(int(datetime.now().timestamp() * 1000))
+
+    # Tier expiry
+    expires_at = None
+    if item.tier in TIER_DURATIONS:
+        expires_at = int(datetime.now().timestamp()) + TIER_DURATIONS[item.tier]
+
+    initial_status = "active" if (item.tier == "free" or is_demo_user or is_admin) else "awaiting_payment"
+
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO listings
+            (id, user_id, user_name, user_username, title, description, price, cat, type,
+             contact, photo, tier, city, status, created, expires_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                listing_id,
+                user["id"],
+                user.get("first_name", ""),
+                user.get("username", ""),
+                item.title,
+                item.description,
+                item.price,
+                item.cat,
+                item.type,
+                item.contact,
+                item.photo,
+                item.tier,
+                item.city,
+                initial_status,
+                int(datetime.now().timestamp() * 1000),
+                expires_at,
+            ),
+        )
+        conn.commit()
+
+    logger.info(
+        f"Listing {listing_id} created: user={user['id']} tier={item.tier} "
+        f"status={initial_status} demo={is_demo_user}"
+    )
+
+    # Posting to channel happens inside the invoice block above
+    # (so demo users get channel posts without invoice, real users get channel post after payment)
+
+    # Paid tier → send Stars invoice via direct HTTP (reliable)
+    invoice_msg_id = None
+    invoice_error = None
+    skip_invoice_reason = None
+
+    if item.tier in ("premium", "vip"):
+        if is_demo_user:
+            skip_invoice_reason = "demo user (DEMO_MODE=1) — no payment required"
+        elif not BOT_TOKEN:
+            invoice_error = "BOT_TOKEN not set"
+        else:
+            try:
+                amount = TIER_PRICES[item.tier]
+                tier_name = "TOP 24 часа" if item.tier == "premium" else "VIP 7 дней"
+                import urllib.request
+                import urllib.parse
+                invoice_payload = {
+                    "chat_id": str(user["id"]),
+                    "title": f"{tier_name} · {item.title[:40]}",
+                    "description": (
+                        f"📱 <b>{item.title}</b>\n\n"
+                        f"💰 Цена: {item.price:,} ₽\n"
+                        f"📍 {item.city}\n\n"
+                        f"<b>Что даёт {tier_name}:</b>\n"
+                        f"{('• Размещение в топе ленты 24 часа\n• Выделение золотом' if item.tier == 'premium' else '• Размещение в VIP-зоне 7 дней\n• Приоритет в поиске\n• Бейдж VIP')}".
+                        rstrip()
+                    ),
+                    "payload": json.dumps({"listing_id": listing_id, "tier": item.tier}),
+                    "provider_token": "",
+                    "currency": "XTR",
+                    "prices": json.dumps([{"label": tier_name, "amount": amount}]),
+                }
+                # Add photo if item has one (not base64 — Telegram needs URL or file_id)
+                # For now, skip photo in invoice (can be added later with photo upload)
+                data = urllib.parse.urlencode(invoice_payload).encode()
+                req = urllib.request.Request(
+                    f"https://api.telegram.org/bot{BOT_TOKEN}/sendInvoice",
+                    data=data,
+                )
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    result = json.loads(resp.read().decode())
+                if result.get("ok"):
+                    invoice_msg_id = result["result"]["message_id"]
+                    log_msg = f"[INVOICE] {listing_id}: sent msg_id={invoice_msg_id}"
+                    print(log_msg, flush=True)
+                else:
+                    invoice_error = str(result)
+                    log_msg = f"[INVOICE] {listing_id}: TG error: {result}"
+                    print(log_msg, flush=True)
+                try:
+                    with open("/data/last_post.log", "a") as f:
+                        f.write(log_msg + "\n")
+                except Exception:
+                    pass
+            except Exception as e:
+                invoice_error = str(e)
+                log_msg = f"[INVOICE] {listing_id}: EXCEPTION {type(e).__name__}: {e}"
+                print(log_msg, flush=True)
+                try:
+                    with open("/data/last_post.log", "a") as f:
+                        f.write(log_msg + "\n")
+                except Exception:
+                    pass
+
+    # ALWAYS post to channel for premium/vip tiers (regardless of payment)
+    if item.tier in ("premium", "vip"):
+        log_msg = f"[CREATE_LISTING] {listing_id}: ENTERING channel post block, tier={item.tier}"
+        print(log_msg, flush=True)
+        try:
+            with open("/data/last_post.log", "a") as f:
+                f.write(log_msg + "\n")
+        except Exception:
+            pass
+        # Inline direct HTTP post (proven to work via /debug/post-channel-test)
+        try:
+            price_str = f"{item.price:,} ₽".replace(",", " ")
+            tier_emoji = "👑" if item.tier == "vip" else ("⭐" if item.tier == "premium" else "📦")
+            text = (
+                f"{tier_emoji} {item.cat.capitalize()} · Продам\n\n"
+                f"<b>{item.title}</b>\n"
+                f"💰 Цена: {price_str}\n\n"
+                f"📍 {item.city}\n"
+                f"🔗 https://ibaraholka.p.spru.io/"
+            )
+            import urllib.request
+            import urllib.parse
+            payload = {
+                "chat_id": str(CHANNEL_ID),
+                "text": text,
+                "disable_web_page_preview": "true",
+            }
+            data = urllib.parse.urlencode(payload).encode()
+            req = urllib.request.Request(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                data=data,
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                result = json.loads(resp.read().decode())
+            if result.get("ok"):
+                msg_id = result["result"]["message_id"]
+                log_msg = f"[CREATE_LISTING] {listing_id}: SUCCESS msg_id={msg_id}"
+                print(log_msg, flush=True)
+                try:
+                    with open("/data/last_post.log", "a") as f:
+                        f.write(log_msg + "\n")
+                except Exception:
+                    pass
+                with get_db() as conn:
+                    cur = conn.execute(
+                        "UPDATE listings SET channel_message_id=? WHERE id=?",
+                        (msg_id, listing_id),
+                    )
+                    conn.commit()
+                    log_msg = f"[CREATE_LISTING] {listing_id}: DB UPDATED rows={cur.rowcount}"
+                    print(log_msg, flush=True)
+                    try:
+                        with open("/data/last_post.log", "a") as f:
+                            f.write(log_msg + "\n")
+                    except Exception:
+                        pass
+            else:
+                log_msg = f"[CREATE_LISTING] {listing_id}: TG error: {result}"
+                print(log_msg, flush=True)
+                try:
+                    with open("/data/last_post.log", "a") as f:
+                        f.write(log_msg + "\n")
+                except Exception:
+                    pass
+        except Exception as e:
+            log_msg = f"[CREATE_LISTING] {listing_id}: EXCEPTION {type(e).__name__}: {e}"
+            print(log_msg, flush=True)
+            try:
+                with open("/data/last_post.log", "a") as f:
+                    f.write(log_msg + "\n")
+            except Exception:
+                pass
+
+    # If invoice failed for paid tier (not demo), downgrade listing to free
+    if item.tier in ("premium", "vip") and invoice_error and not is_demo_user:
+        with get_db() as conn:
+            conn.execute("UPDATE listings SET tier='free' WHERE id=?", (listing_id,))
+            conn.commit()
+        logger.info(f"Listing {listing_id}: downgraded to free due to invoice failure")
+
+    return {
+        "id": listing_id,
+        "status": "active",
+        "tier": ("free" if (invoice_error and not is_demo_user) else item.tier),
+        "invoice_sent": invoice_msg_id is not None,
+        "invoice_error": invoice_error,
+        "skip_invoice_reason": skip_invoice_reason,
+    }
+
+
+@app.post("/debug/post-channel-test")
+async def debug_post_channel_test(request: Request):
+    """Debug: try posting a test message to the channel directly."""
+    if request.headers.get("x-admin-token", "") != ADMIN_TOKEN:
+        raise HTTPException(403, "Admin only")
+    try:
+        import urllib.request
+        import urllib.parse
+        payload = {
+            "chat_id": str(CHANNEL_ID),
+            "text": "🧪 Debug test from /debug/post-channel-test",
+            "disable_web_page_preview": "true",
+        }
+        data = urllib.parse.urlencode(payload).encode()
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            data=data,
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = json.loads(resp.read().decode())
+        return {
+            "ok": True,
+            "bot_token_set": bool(BOT_TOKEN),
+            "channel_id": CHANNEL_ID,
+            "telegram_result": result,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e), "bot_token_set": bool(BOT_TOKEN), "channel_id": CHANNEL_ID}
+
+
+@app.post("/payments/yukassa/create")
+async def create_yukassa_payment(request: Request):
+    """Create a YooKassa payment for a listing. Returns confirmation_url."""
+    body = await request.json()
+    listing_id = body.get("listing_id", "")
+    tier = body.get("tier", "vip")
+    user_id = body.get("user_id", 0)
+
+    if tier not in TIER_PRICES:
+        raise HTTPException(400, "Invalid tier")
+    amount_rub = TIER_PRICES[tier] * 1.4  # 50⭐=70₽, 150⭐=210₽
+
+    shop_id = os.getenv("YOOKASSA_SHOP_ID", "")
+    secret_key = os.getenv("YOOKASSA_SECRET_KEY", "")
+
+    if not shop_id or not secret_key:
+        # Test mode: return fallback URLs (юkassa быстрая оплата / tinkoff / sber)
+        return {
+            "ok": True,
+            "test_mode": True,
+            "fallback": True,
+            "amount_rub": int(amount_rub),
+            "urls": {
+                "yoomoney": f"https://yoomoney.ru/quickpay/shop.xml?sum={int(amount_rub)}&quickpay-form=shop&paymentType=AC&successURL=https://t.me/Ibaraholka_bot",
+                "tinkoff": f"https://www.tinkoff.ru/rm/r_tGkNgT2sV8.main_pay?amount={int(amount_rub)}00&successURL=https://t.me/Ibaraholka_bot",
+                "sber": f"https://online.sberbank.ru/CSAFront/payment/showPrePaymentPage.do?amount={int(amount_rub)}&to=АйБарахолка",
+            },
+        }
+
+    # Real YooKassa integration
+    try:
+        import urllib.request
+        import base64
+        import secrets
+        idem_key = secrets.token_hex(16)
+        auth = base64.b64encode(f"{shop_id}:{secret_key}".encode()).decode()
+        return_url = os.getenv("YOOKASSA_RETURN_URL", "https://t.me/Ibaraholka_bot")
+        payload = {
+            "amount": {"value": f"{int(amount_rub)}.00", "currency": "RUB"},
+            "capture": True,
+            "confirmation": {
+                "type": "redirect",
+                "return_url": return_url,
+            },
+            "description": f"АйБарахолка · {tier.upper()} · {listing_id}",
+            "metadata": {"listing_id": listing_id, "tier": tier, "user_id": str(user_id)},
+        }
+        data = json.dumps(payload).encode()
+        req = urllib.request.Request(
+            "https://api.yookassa.ru/v3/payments",
+            data=data,
+            headers={
+                "Authorization": f"Basic {auth}",
+                "Idempotence-Key": idem_key,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            result = json.loads(resp.read().decode())
+        return {
+            "ok": True,
+            "test_mode": False,
+            "payment_id": result.get("id"),
+            "confirmation_url": result.get("confirmation", {}).get("confirmation_url"),
+            "status": result.get("status"),
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/payments/yukassa/webhook")
+async def yukassa_webhook(request: Request):
+    """YooKassa payment notification. Activates listing when succeeded.
+    Configure in YooKassa dashboard: https://yookassa.ru/my/shop/fnsi/notifications
+    URL: https://web-production-338982.up.railway.app/payments/yukassa/webhook
+    Events: payment.succeeded, payment.canceled
+    """
+    try:
+        body = await request.json()
+        event = body.get("event", "")
+        obj = body.get("object", {})
+        metadata = obj.get("metadata", {})
+        listing_id = metadata.get("listing_id", "")
+        tier = metadata.get("tier", "")
+        user_id = metadata.get("user_id", "")
+
+        log_msg = f"[YUKASSA] event={event} listing={listing_id} status={obj.get('status')}"
+        print(log_msg, flush=True)
+        try:
+            with open("/data/last_post.log", "a") as f:
+                f.write(log_msg + "\n")
+        except Exception:
+            pass
+
+        if event != "payment.succeeded":
+            return {"ok": True, "ignored": event}
+
+        if not listing_id:
+            return {"ok": False, "error": "no listing_id in metadata"}
+
+        # Activate listing
+        item_dict = None
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT * FROM listings WHERE id=?", (listing_id,)
+            ).fetchone()
+            if row:
+                conn.execute("UPDATE listings SET status='active' WHERE id=?", (listing_id,))
+                conn.commit()
+                item_dict = {
+                    "id": row["id"], "title": row["title"], "description": row["description"],
+                    "price": row["price"], "cat": row["cat"], "type": row["type"],
+                    "contact": row["contact"], "photo": row["photo"], "tier": row["tier"],
+                    "city": row["city"],
+                }
+
+        # Post to channel
+        if item_dict:
+            try:
+                user = {"id": int(user_id) if user_id else 0, "first_name": "Покупатель", "username": ""}
+                listing_in = ListingIn(**item_dict)
+                await post_to_channel(listing_id, listing_in, user)
+            except Exception as e:
+                print(f"YooKassa webhook post_to_channel error: {e}", flush=True)
+
+        # Notify user via Telegram
+        try:
+            if user_id and bot is not None:
+                amount = obj.get("amount", {}).get("value", "?")
+                text = (
+                    f"✅ <b>Оплата получена!</b>\n\n"
+                    f"Объявление <code>{listing_id}</code> ({tier.upper()}) активировано.\n"
+                    f"💰 Списано: {amount} ₽\n\n"
+                    f"Оно появилось в канале @ibaraholkatyt."
+                )
+                kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="📱 Открыть барахолку", web_app=WebAppInfo(url=WEBAPP_URL))]
+                ])
+                await bot.send_message(int(user_id), text, reply_markup=kb)
+        except Exception as e:
+            print(f"YooKassa webhook notify error: {e}", flush=True)
+
+        return {"ok": True, "activated": listing_id}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/debug/create-vip-test")
+async def debug_create_vip_test(request: Request):
+    """Debug: create VIP listing for Sasha (real user) for testing invoice flow."""
+    if request.headers.get("x-admin-token", "") != ADMIN_TOKEN:
+        raise HTTPException(403, "Admin only")
+    # Use Sasha's real Telegram ID from header (default)
+    user_id = int(request.headers.get("x-telegram-user-id", "748834052"))
+    user_name = request.headers.get("x-telegram-user-name", "Sasha")
+    user_username = request.headers.get("x-telegram-user-username", "Izdelie0810")
+    listing_id = "l_test_" + str(int(datetime.now().timestamp() * 1000))
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO listings (id, user_id, user_name, user_username, title, description, price, cat, type, contact, photo, tier, city, status, created, expires_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (listing_id, user_id, user_name, user_username, "TEST VIP iPhone 14 Pro", "Тестовое объявление", 75000, "iphone", "sell", "@Izdelie0810", "", "vip", "Москва", "awaiting_payment", int(datetime.now().timestamp()), int(datetime.now().timestamp()) + 7*86400),
+        )
+        conn.commit()
+    # Now try to send invoice
+    try:
+        import urllib.request, urllib.parse
+        amount = TIER_PRICES["vip"]
+        tier_name = "VIP 7 дней"
+        text = (
+            f"👑 iPhone · Продам\n\n"
+            f"<b>TEST VIP iPhone 14 Pro</b>\n"
+            f"💰 Цена: 75 000 ₽\n\n"
+            f"📍 Москва\n"
+            f"🔗 https://ibaraholka.p.spru.io/"
+        )
+        payload = {
+            "chat_id": str(user_id),
+            "title": f"VIP 7 дней · TEST VIP iPhone 14 Pro",
+            "description": text,
+            "payload": json.dumps({"listing_id": listing_id, "tier": "vip"}),
+            "provider_token": "",
+            "currency": "XTR",
+            "prices": json.dumps([{"label": tier_name, "amount": amount}]),
+        }
+        data = urllib.parse.urlencode(payload).encode()
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendInvoice",
+            data=data,
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = json.loads(resp.read().decode())
+        return {
+            "listing_id": listing_id,
+            "user_id": user_id,
+            "invoice_result": result,
+        }
+    except Exception as e:
+        return {"listing_id": listing_id, "error": str(e)}
+
+
+@app.delete("/listings/{listing_id}")
+async def delete_listing(listing_id: str, request: Request):
+    """Delete your own listing, or any listing if admin token provided.
+
+    Also removes the corresponding message from the channel.
+    """
+    admin_token = request.headers.get("x-admin-token", "")
+    deleted_from_channel = False
+    if admin_token == ADMIN_TOKEN:
+        # Admin bypass: delete any listing + from channel
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT channel_message_id FROM listings WHERE id=?",
+                (listing_id,)
+            ).fetchone()
+            ch_msg_id = row["channel_message_id"] if row else None
+            conn.execute("DELETE FROM listings WHERE id=?", (listing_id,))
+            conn.commit()
+        deleted_from_channel = await delete_from_channel(ch_msg_id)
+        return {"ok": True, "admin": True, "channel_deleted": deleted_from_channel}
+
+    user = await get_user(request.headers.get("authorization", ""))
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT user_id, channel_message_id FROM listings WHERE id=?",
+            (listing_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, "Listing not found")
+        if row["user_id"] != user["id"]:
+            raise HTTPException(403, "Not your listing")
+        ch_msg_id = row["channel_message_id"]
+        conn.execute("DELETE FROM listings WHERE id=?", (listing_id,))
+        conn.commit()
+    deleted_from_channel = await delete_from_channel(ch_msg_id)
+    return {"ok": True, "channel_deleted": deleted_from_channel}
+
+
+@app.get("/admin/listings")
+async def admin_listings(admin_token: str = ""):
+    """Admin: list all listings. Pass ?admin_token=demo."""
+    if admin_token != ADMIN_TOKEN:
+        raise HTTPException(403, "Admin token required")
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT id, user_id, user_name, user_username, title, description, price, cat, type, "
+            "contact, photo, tier, city, status, created, expires_at, channel_message_id "
+            "FROM listings ORDER BY created DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+@app.get("/admin/stats")
+async def admin_stats(admin_token: str = ""):
+    """Admin dashboard: revenue, listings by tier/day, top sellers."""
+    if admin_token != ADMIN_TOKEN:
+        raise HTTPException(403, "Admin token required")
+
+    # Prices in rubles per tier
+    PRICES = {"vip": 210, "premium": 70, "free": 0}
+    now = int(time.time())
+    today_start = now - (now % 86400)  # midnight UTC
+    week_start = today_start - 7 * 86400
+    month_start = today_start - 30 * 86400
+
+    with get_db() as conn:
+        # All listings
+        all_rows = conn.execute(
+            "SELECT id, user_id, user_username, tier, status, created, price FROM listings"
+        ).fetchall()
+
+        total = len(all_rows)
+        by_tier = {"vip": 0, "premium": 0, "free": 0}
+        by_status = {"active": 0, "deleted": 0, "expired": 0}
+        revenue = {"today": 0, "week": 0, "month": 0, "all": 0, "today_stars": 0, "week_stars": 0, "month_stars": 0}
+        by_day = {}  # date -> revenue in rubles
+        by_user = {}  # user_id -> {username, count, revenue}
+
+        for r in all_rows:
+            tier = r["tier"] or "free"
+            status = r["status"] or "active"
+            ts = r["created"] or 0
+            price = PRICES.get(tier, 0)
+
+            by_tier[tier] = by_tier.get(tier, 0) + 1
+            by_status[status] = by_status.get(status, 0) + 1
+
+            if status == "active" and price > 0:
+                # Revenue
+                revenue["all"] += price
+                if ts >= today_start:
+                    revenue["today"] += price
+                if ts >= week_start:
+                    revenue["week"] += price
+                if ts >= month_start:
+                    revenue["month"] += price
+
+                # Stars equivalent (XTR ≈ ₽1.4)
+                revenue["today_stars"] = revenue["today"] // 1.4
+                revenue["week_stars"] = revenue["week"] // 1.4
+                revenue["month_stars"] = revenue["month"] // 1.4
+
+                # By day
+                day = time.strftime("%Y-%m-%d", time.gmtime(ts))
+                by_day[day] = by_day.get(day, 0) + price
+
+                # By user
+                uid = r["user_id"]
+                if uid:
+                    if uid not in by_user:
+                        by_user[uid] = {"username": r["user_username"] or "", "count": 0, "revenue": 0}
+                    by_user[uid]["count"] += 1
+                    by_user[uid]["revenue"] += price
+
+        # Sort top sellers
+        top_sellers = sorted(
+            [{"user_id": uid, **data} for uid, data in by_user.items()],
+            key=lambda x: x["revenue"], reverse=True
+        )[:5]
+
+        # Last 7 days chart data (sorted)
+        chart_days = []
+        for i in range(6, -1, -1):
+            d = time.strftime("%Y-%m-%d", time.gmtime(now - i * 86400))
+            chart_days.append({"date": d, "revenue": by_day.get(d, 0)})
+
+        # Conversion: listings / paid listings
+        paid = by_tier.get("vip", 0) + by_tier.get("premium", 0)
+        conversion = (paid / total * 100) if total else 0
+
+        return {
+            "total_listings": total,
+            "by_tier": by_tier,
+            "by_status": by_status,
+            "revenue": revenue,
+            "conversion_pct": round(conversion, 1),
+            "top_sellers": top_sellers,
+            "chart": chart_days,
+            "generated_at": now,
+        }
+
+
+@app.post("/admin/post-channel")
+async def admin_post_channel(request: Request):
+    """Admin: post a listing to channel manually."""
+    admin_token = request.headers.get("x-admin-token", "")
+    if admin_token != ADMIN_TOKEN:
+        raise HTTPException(403, "Admin token required")
+    body = await request.json()
+    listing_id = body.get("listing_id", "")
+    if not listing_id:
+        raise HTTPException(400, "listing_id required")
+
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM listings WHERE id=?", (listing_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "Listing not found")
+
+    # Build ListingIn-like dict
+    class _L:
+        pass
+    item = _L()
+    item.title = row["title"]
+    item.description = row["description"]
+    item.price = row["price"]
+    item.cat = row["cat"]
+    item.type = row["type"]
+    item.contact = row["contact"]
+    item.photo = row["photo"] or ""
+    item.tier = row["tier"]
+    item.city = row["city"]
+    user = {"first_name": row["user_name"] or "Продавец", "username": row["user_username"], "id": row["user_id"]}
+
+    try:
+        await post_to_channel(listing_id, item, user)
+        return {"ok": True, "posted": True}
+    except Exception as e:
+        logger.error(f"admin_post_channel failed: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/admin/listings/{listing_id}/approve")
+async def approve_listing(listing_id: str, request: Request):
+    """Admin: approve a pending listing. Requires ADMIN_IDS set."""
+    if not ADMIN_IDS:
+        raise HTTPException(403, "Admin not configured")
+    user = await get_user(request.headers.get("authorization", ""))
+    if user["id"] not in ADMIN_IDS:
+        raise HTTPException(403, "Admin only")
+    with get_db() as conn:
+        conn.execute("UPDATE listings SET status='active' WHERE id=?", (listing_id,))
+        conn.commit()
+    return {"ok": True}
+
+
+# ============================================================
+# Run: bot (polling) + API (uvicorn) in same process
+# ============================================================
+async def run_bot():
+    """Run aiogram bot in polling mode."""
+    if bot is None or dp is None:
+        logger.warning("⚠️  Bot not initialized (no BOT_TOKEN) — skipping polling. API will still run.")
+        # Keep task alive forever
+        while True:
+            await asyncio.sleep(3600)
+        return
+    logger.info("🤖 Starting bot polling...")
+    await bot.delete_webhook(drop_pending_updates=True)
+    await dp.start_polling(bot, handle_signals=False)
+
+
+async def run_api():
+    """Run FastAPI via uvicorn."""
+    config = uvicorn.Config(
+        app,
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "8080")),
+        log_level="info",
+    )
+    server = uvicorn.Server(config)
+    logger.info(f"🌐 Starting API on port {config.port}")
+    await server.serve()
+
+
+async def main():
+    init_db()
+    # Run bot and API concurrently
+    await asyncio.gather(run_bot(), run_api())
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Stopped")
