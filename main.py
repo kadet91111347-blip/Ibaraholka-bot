@@ -1980,15 +1980,22 @@ def test_postgres():
     import os
     import psycopg2
     url = os.getenv("DATABASE_URL", "").strip()
+    # Debug: report length and prefix so we can verify Render stored it correctly
+    import hashlib
+    dbg = {
+        "url_len": len(url),
+        "url_hash": hashlib.sha256(url.encode()).hexdigest()[:16] if url else None,
+        "url_prefix": url[:35] + "..." if len(url) > 35 else url,
+    }
     if not url:
-        return {"ok": False, "error": "DATABASE_URL not set"}
+        return {"ok": False, "error": "DATABASE_URL not set", "debug": dbg}
     try:
         with psycopg2.connect(url, connect_timeout=10) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT current_database(), version();")
                 db_name, version = cur.fetchone()
                 cur.execute("""
-                    SELECT table_name FROM information_schema.tables 
+                    SELECT table_name FROM information_schema.tables
                     WHERE table_schema='public' ORDER BY table_name
                 """)
                 tables = [r[0] for r in cur.fetchall()]
@@ -1998,9 +2005,10 @@ def test_postgres():
                     "version": version[:60],
                     "tables": tables,
                     "tables_count": len(tables),
+                    "debug": dbg,
                 }
     except Exception as e:
-        return {"ok": False, "error": str(e)[:300]}
+        return {"ok": False, "error": str(e)[:300], "debug": dbg}
 
 
 if __name__ == "__main__":
