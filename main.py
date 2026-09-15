@@ -132,6 +132,22 @@ def init_db():
             conn.execute("ALTER TABLE listings ADD COLUMN channel_message_id INTEGER DEFAULT NULL")
         except Exception:
             pass
+        # Postgres upgrade: convert INTEGER columns to BIGINT to fit Telegram user_ids (8-9 digits)
+        try:
+            conn.execute("ALTER TABLE listings ALTER COLUMN user_id TYPE BIGINT")
+            conn.execute("ALTER TABLE listings ALTER COLUMN price TYPE BIGINT")
+            conn.execute("ALTER TABLE listings ALTER COLUMN created TYPE BIGINT")
+            conn.execute("ALTER TABLE listings ALTER COLUMN expires_at TYPE BIGINT")
+            conn.execute("ALTER TABLE listings ALTER COLUMN channel_message_id TYPE BIGINT")
+        except Exception:
+            pass  # SQLite doesn't support ALTER COLUMN — silent skip
+        # Same upgrade for conversations / ai_responses / variant_stats / user_profiles / learned_patterns
+        for tbl in ('conversations', 'ai_responses', 'variant_stats', 'user_profiles', 'learned_patterns'):
+            try:
+                conn.execute(f"ALTER TABLE {tbl} ALTER COLUMN user_id TYPE BIGINT")
+                conn.execute(f"ALTER TABLE {tbl} ALTER COLUMN created TYPE BIGINT")
+            except Exception:
+                pass
         conn.executescript("""
         CREATE INDEX IF NOT EXISTS idx_status ON listings(status);
         CREATE INDEX IF NOT EXISTS idx_tier ON listings(tier);
