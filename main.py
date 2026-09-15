@@ -2057,12 +2057,25 @@ def test_postgres():
                     WHERE table_schema='public' ORDER BY table_name
                 """)
                 tables = [r[0] for r in cur.fetchall()]
+                # Also test the listings query through db_cursor
+                test = []
+                try:
+                    with db_cursor() as dconn:
+                        cur2 = dconn.execute("SELECT id, title, price, tier FROM listings WHERE status='active' LIMIT 3")
+                        for row in cur2.fetchall():
+                            try:
+                                test.append(dict(row))
+                            except Exception as e:
+                                test.append({"_err": str(e), "_raw": str(row)})
+                except Exception as e:
+                    test = [{"_query_err": str(e)}]
                 return {
                     "ok": True,
                     "database": db_name,
                     "version": version[:60],
                     "tables": tables,
                     "tables_count": len(tables),
+                    "sample_listings": test,
                     "debug": dbg,
                 }
     except Exception as e:
