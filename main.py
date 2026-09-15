@@ -1990,3 +1990,43 @@ async def telegram_webhook(request: Request):
     except Exception as e:
         logger.error(f"Webhook handler error: {e}", flush=True)
         return {"ok": False, "error": str(e)}
+
+
+@app.post("/debug/setup-webhook")
+async def setup_webhook(request: Request):
+    """
+    One-time setup: register Telegram webhook URL with Telegram Bot API.
+    Body: {"url": "https://ibaraholka-bot.onrender.com/webhook/telegram"}
+    Or auto-detect from request host.
+    """
+    if not bot:
+        raise HTTPException(503, "Bot not initialized")
+    try:
+        body = await request.json() if (await request.body()) else {}
+    except Exception:
+        body = {}
+    
+    provided_url = body.get("url")
+    if provided_url:
+        webhook_url = f"{provided_url.rstrip('/')}{WEBHOOK_PATH}"
+    else:
+        # Auto from request host
+        host = request.headers.get("host", "ibaraholka-bot.onrender.com")
+        scheme = request.headers.get("x-forwarded-proto", "https")
+        webhook_url = f"{scheme}://{host}{WEBHOOK_PATH}"
+    
+    # Set webhook
+    result = await bot.set_webhook(url=webhook_url, drop_pending_updates=True)
+    info = await bot.get_webhook_info()
+    return {
+        "ok": True,
+        "webhook_url": webhook_url,
+        "set_webhook_result": result,
+        "webhook_info": {
+            "url": info.url,
+            "pending_update_count": info.pending_update_count,
+            "last_error_message": info.last_error_message,
+            "last_error_date": info.last_error_date,
+            "max_connections": info.max_connections,
+        }
+    }
