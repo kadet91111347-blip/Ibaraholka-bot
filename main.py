@@ -1920,9 +1920,14 @@ async def run_bot():
         while True:
             await asyncio.sleep(3600)
         return
-    logger.info("🤖 Starting bot polling...")
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot, handle_signals=False)
+    logger.info("🤖 Starting bot polling (skip — using webhook)...")
+    # We use webhook endpoint at /webhook/telegram instead of long polling
+    # because polling is unreliable on free Render (instance sleeps).
+    # Webhook handler is defined above in telegram_webhook() route.
+    logger.info("🤖 Bot ready — Telegram will POST updates to /webhook/telegram")
+    # Keep task alive (uvicorn handles webhook requests)
+    while True:
+        await asyncio.sleep(3600)
 
 
 async def run_api():
@@ -1958,3 +1963,30 @@ if __name__ == "__main__":
         import time
         while True:
             time.sleep(60)
+
+
+# ============================================================
+# Telegram webhook
+# ============================================================
+WEBHOOK_PATH = "/webhook/telegram"
+
+@app.post(WEBHOOK_PATH)
+async def telegram_webhook(request: Request):
+    """Receive updates from Telegram webhook instead of polling."""
+    if not dp:
+        raise HTTPException(503, "Bot not initialized")
+    try:
+        body = await request.json()
+    except Exception as e:
+        raise HTTPException(400, f"Bad JSON: {e}")
+
+    # Feed update to dispatcher as a fake message via aiogram Bot method
+    try:
+        from aiogram import types as aiogram_types
+        update = aiogram_types.Update(**body)
+        # Process synchronously (handle them all in one request)
+        await dp.feed_update(bot, update)
+        return {"ok": True}
+    except Exception as e:
+        logger.error(f"Webhook handler error: {e}", flush=True)
+        return {"ok": False, "error": str(e)}
