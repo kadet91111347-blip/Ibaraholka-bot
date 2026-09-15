@@ -1899,7 +1899,10 @@ async def run_api():
 
 
 async def main():
-    init_db()
+    try:
+        init_db()
+    except Exception as e:
+        logger.error(f"init_db failed: {e}", flush=True)
     # Run bot and API concurrently
     await asyncio.gather(run_bot(), run_api())
 
@@ -1909,3 +1912,9 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         logger.info("Stopped")
+    except Exception as e:
+        logger.error(f"Fatal: {e}", flush=True)
+        # Keep process alive so Railway doesn't restart-loop
+        import time
+        while True:
+            time.sleep(60)
