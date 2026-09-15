@@ -1974,6 +1974,24 @@ async def main():
 
 
 
+@app.post("/debug/migrate")
+def run_migration(source_db: str = "ibaraholka.db"):
+    """One-shot: copy rows from local sqlite to postgres."""
+    import io
+    import contextlib
+    if not USE_POSTGRES:
+        return {"ok": False, "error": "Postgres not configured"}
+    if not os.path.exists(source_db):
+        return {"ok": False, "error": f"sqlite not found: {source_db}"}
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            migrate_sqlite_to_pg(source_db)
+        return {"ok": True, "log": buf.getvalue()}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:500], "log": buf.getvalue()}
+
+
 @app.get("/debug/test-pg")
 def test_postgres():
     """Test direct PostgreSQL connection."""
