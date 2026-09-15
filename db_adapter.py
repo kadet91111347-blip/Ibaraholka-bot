@@ -14,6 +14,10 @@ DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 USE_POSTGRES = bool(DATABASE_URL)
 
 
+class _PostgresUnavailable(Exception):
+    """Raised when Postgres is configured but unreachable; triggers sqlite fallback."""
+
+
 class _PostgresRow(dict):
     """Row that allows both dict access and attribute access (sqlite3.Row-like)."""
     def __getitem__(self, k):
@@ -92,9 +96,13 @@ class _PostgresConnection:
     """Connection wrapper compatible with sqlite3.Connection usage in main.py."""
     def __init__(self):
         # Parse URL to handle sslmode correctly
-        self._conn = psycopg2.connect(DATABASE_URL)
-        self._conn.autocommit = True
-        self._cursor = _PostgresCursor(self._conn.cursor(cursor_factory=RealDictCursor))
+        try:
+            self._conn = psycopg2.connect(DATABASE_URL, connect_timeout=10)
+            self._conn.autocommit = True
+            self._cursor = _PostgresCursor(self._conn.cursor(cursor_factory=RealDictCursor))
+        except Exception as e:
+            print(f"[db_adapter] PG connection failed: {e}; falling back to sqlite", flush=True)
+            raise _PostgresUnavailable(str(e))
 
     @property
     def row_factory(self):
@@ -253,9 +261,16 @@ DB_FILE = os.getenv("DB_FILE", "/tmp/ibaraholka.db")
 
 
 def get_db_connection():
-    """Return DB connection (PostgreSQL if DATABASE_URL set, else sqlite)."""
+    """Return DB connection (PostgreSQL if DATABASE_URL set AND reachable, else sqlite).
+
+    If Postgres is configured but the password / network is wrong, we silently
+    fall back to sqlite so the app keeps starting and we can debug later.
+    """
     if USE_POSTGRES:
-        return _PostgresConnection()
+        try:
+            return _PostgresConnection()
+        except _PostgresUnavailable:
+            print("[db_adapter] Falling back to sqlite (Postgres unavailable)", flush=True)
     return _SqliteConnection(DB_FILE)
 
 
