@@ -1432,6 +1432,46 @@ async def create_listing(item: ListingIn, request: Request):
             conn.commit()
         logger.info(f"Listing {listing_id}: downgraded to free due to invoice failure")
 
+    # Send Telegram notification with "I paid" button for paid-tier listings
+    if item.tier in ("premium", "vip") and not is_demo_user and not is_admin:
+        try:
+            tier_name = "TOP 24 часа" if item.tier == "premium" else "VIP 7 дней"
+            notify_text = (
+                f"✅ <b>Объявление создано!</b>\n\n"
+                f"<b>{item.title}</b>\n"
+                f"💰 Цена: {item.price:,} ₽\n"
+                f"📍 {item.city}\n"
+                f"🎯 Тариф: <b>{tier_name}</b>\n"
+                f"🆔 ID: <code>{listing_id}</code>\n\n"
+                f"<b>Способы оплаты:</b>\n\n"
+                f"⭐ <b>Оплатить через Telegram Stars</b> — нажмите кнопку ниже "
+                f"в сообщении с инвойсом (найдёте его выше).\n\n"
+                f"💳 <b>Оплатить через Тинькофф</b> — перейдите по ссылке:\n"
+                f"https://www.tbank.ru/rm/r_TGugYbYVEb.mLmrPUwlTy/aHI4Y75190\n\n"
+                f"<b>После оплаты через Тинькофф:</b>\n"
+                f"Просто нажмите кнопку «✅ Я оплатил» ниже — объявление "
+                f"сразу появится в канале @ibaraholkatyt."
+            )
+            from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+            notify_kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="💳 Оплатить через Тинькофф",
+                    url="https://www.tbank.ru/rm/r_TGugYbYVEb.mLmrPUwlTy/aHI4Y75190"
+                )],
+                [InlineKeyboardButton(
+                    text="✅ Я оплатил",
+                    callback_data=f"confirm_paid:{listing_id}"
+                )],
+                [InlineKeyboardButton(
+                    text="📱 Открыть барахолку",
+                    web_app=WebAppInfo(url=WEBAPP_URL)
+                )],
+            ])
+            await bot.send_message(user["id"], notify_text, reply_markup=notify_kb)
+            logger.info(f"Listing {listing_id}: paid notification with tbank button sent")
+        except Exception as e:
+            logger.error(f"Paid notification error for {listing_id}: {e}")
+
     return {
         "id": listing_id,
         "status": "active",
