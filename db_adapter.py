@@ -307,8 +307,15 @@ def migrate_sqlite_to_pg(source_db_file):
             cols = [d[0] for d in src.execute(f"SELECT * FROM {t}").description]
             placeholders = ','.join(['%s'] * len(cols))
             col_str = ','.join(cols)
+            # Identify timestamp columns (microseconds in sqlite) and convert to seconds
+            ts_cols = {'created', 'expires_at', 'updated_at', 'paid_at', 'created_at'}
             for r in rows:
-                vals = [r[c] for c in cols]
+                vals = []
+                for c in cols:
+                    v = r[c]
+                    if c in ts_cols and isinstance(v, int) and v > 10**12:
+                        v = v // 1000  # microseconds -> seconds
+                    vals.append(v)
                 try:
                     cur = dst.cursor()
                     cur.execute(f"INSERT INTO {t} ({col_str}) VALUES ({placeholders}) ON CONFLICT DO NOTHING", vals)
