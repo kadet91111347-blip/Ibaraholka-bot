@@ -1,0 +1,710 @@
+<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"><meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"><meta http-equiv="Pragma" content="no-cache"><meta http-equiv="Expires" content="0"><link rel="preconnect" href="https://ibaraholka-bot.onrender.com" crossorigin><link rel="dns-prefetch" href="https://ibaraholka-bot.onrender.com"><title>АйБарахолка</title><style>*{box-sizing:border-box;margin:0;padding:0}:root{--bg:#0B0B0F;--surface:#1A1A22;--surface2:#14141A;--border:#2A2A35;--text:#F5F5F7;--muted:#9A9AA8;--accent:#FF8A4C;--accent-soft:rgba(255,138,76,0.14);--green:#22C55E;--red:#EF4444;--gold:#FFD700}html,body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;line-height:1.5;min-height:100vh;padding-bottom:80px;-webkit-tap-highlight-color:transparent}header{background:var(--bg);padding:12px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10}.title{font-size:16px;font-weight:700;display:flex;align-items:center;gap:6px}.title-dot{width:8px;height:8px;border-radius:50%;background:var(--green);animation:pulse 2s infinite}@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}.btn{background:var(--accent);color:#0B0B0F;border:none;border-radius:10px;padding:8px 12px;font-size:13px;font-weight:700;cursor:pointer;-webkit-tap-highlight-color:transparent;font-family:inherit}.btn:active{transform:scale(0.96)}.btn:disabled{opacity:0.5;cursor:not-allowed}.btn-secondary{background:var(--surface);color:var(--text);border:1px solid var(--border)}.hero{padding:16px 14px}.hero h1{font-size:22px;line-height:1.2;margin-bottom:4px}.hero h1 span{color:var(--accent)}.hero p{color:var(--muted);font-size:12px}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:0 14px;margin-bottom:14px}.stat{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:8px;text-align:center;cursor:pointer;transition:transform .12s,border-color .12s,background .12s;-webkit-tap-highlight-color:transparent}.stat:active{transform:scale(0.96)}.stat.active{border-color:var(--accent);background:rgba(255,122,61,.08)}.stat b{display:block;font-size:18px;color:var(--accent)}.stat span{font-size:10px;color:var(--muted)}.stat-filter-hint{font-size:9px;color:var(--accent);margin-top:2px;display:none}.stat.active .stat-filter-hint{display:inline-block}.filters{display:flex;gap:6px;padding:0 14px;margin-bottom:10px;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}.filters::-webkit-scrollbar{display:none}.filter{padding:6px 12px;background:var(--surface);border:1px solid var(--border);border-radius:999px;font-size:13px;color:var(--text);cursor:pointer;white-space:nowrap;-webkit-tap-highlight-color:transparent;font-family:inherit}.filter.active{background:var(--accent);color:#0B0B0F;border-color:var(--accent)}.listings{padding:0 14px}.empty-state{text-align:center;color:var(--muted);padding:40px 20px;font-size:13px}.empty-state-icon{font-size:48px;margin-bottom:8px;opacity:0.5}.listing{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:12px;margin-bottom:8px;display:flex;gap:10px;align-items:start}.listing-img{width:60px;height:60px;border-radius:10px;background:var(--bg);border:1px solid var(--border);display:grid;place-items:center;font-size:28px;flex-shrink:0}.listing-body{flex:1;min-width:0}.badge{display:inline-block;padding:2px 7px;border-radius:999px;font-size:10px;font-weight:700;margin-right:3px;vertical-align:middle}.b-vip{background:linear-gradient(135deg,#FFD700,#FF8A4C);color:#0B0B0F}.b-top{background:var(--accent);color:#0B0B0F}.b-free{background:#2A2A35;color:var(--muted)}.listing h3{font-size:14px;margin:2px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.listing .price{font-size:16px;font-weight:700;color:var(--accent);margin:2px 0}.listing .meta{color:var(--muted);font-size:10px;margin-bottom:6px}.btn-write{background:var(--accent);color:#0B0B0F;border:none;border-radius:8px;padding:6px 12px;font-weight:700;font-size:11px;cursor:pointer;font-family:inherit;-webkit-tap-highlight-color:transparent}.btn-write:active{transform:scale(0.95)}.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:100;display:none;align-items:center;justify-content:center;padding:14px;overflow-y:auto;-webkit-overflow-scrolling:touch}.modal-bg.open{display:flex}.modal{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:18px;width:100%;max-width:480px;max-height:90vh;overflow-y:auto;-webkit-overflow-scrolling:touch}.modal h2{font-size:16px;margin-bottom:12px}.modal label{display:block;font-size:11px;color:var(--muted);margin-bottom:3px;margin-top:8px}.modal label:first-child{margin-top:0}.modal input,.modal select,.modal textarea{width:100%;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:9px;font-size:13px;font-family:inherit}.modal input:focus,.modal select:focus,.modal textarea:focus{outline:none;border-color:var(--accent)}.tier-row{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:6px}.tier{background:var(--bg);border:2px solid var(--border);border-radius:10px;padding:8px;text-align:center;cursor:pointer;user-select:none;-webkit-tap-highlight-color:transparent;font-family:inherit}.tier.selected{border-color:var(--accent);background:var(--accent-soft)}.tier b{display:block;font-size:12px}.tier span{font-size:10px;color:var(--muted)}.modal-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px}.toast{position:fixed;bottom:90px;left:50%;transform:translateX(-50%);background:var(--accent);color:#0B0B0F;padding:9px 18px;border-radius:999px;font-size:13px;font-weight:600;z-index:200;display:none;max-width:90%;text-align:center;box-shadow:0 4px 20px rgba(0,0,0,0.3)}.toast.err{background:var(--red);color:#fff}.toast.ok{background:var(--green);color:#0B0B0F}.toast.gold{background:var(--gold);color:#0B0B0F}.bottom-nav{position:fixed;bottom:0;left:0;right:0;background:var(--bg);border-top:1px solid var(--border);display:grid;grid-template-columns:repeat(3,1fr);padding:6px 0;z-index:50}.nav-item{background:transparent;border:none;color:var(--muted);padding:5px;cursor:pointer;font-size:10px;display:flex;flex-direction:column;align-items:center;gap:1px;-webkit-tap-highlight-color:transparent;font-family:inherit}.nav-item.active{color:var(--accent)}.nav-item svg{width:22px;height:22px}.pay-btn{width:100%;color:#0B0B0F;border:none;border-radius:12px;padding:13px;font-size:14px;font-weight:700;margin-bottom:8px;cursor:pointer;font-family:inherit;-webkit-tap-highlight-color:transparent}.pay-btn:active{transform:scale(0.97)}.pay-btn:disabled{opacity:0.5}.pay-btn-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px}.pay-close{width:100%;background:transparent;color:var(--muted);border:none;padding:10px;font-size:13px;cursor:pointer;margin-top:10px;font-family:inherit}.pay-info{background:var(--bg);border-radius:8px;padding:10px;margin-top:10px;font-size:11px;color:var(--muted);line-height:1.5}.how-it-works{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:14px;margin:14px}.how-it-works h3{font-size:14px;margin-bottom:10px}.how-step{display:flex;gap:10px;margin-bottom:10px;align-items:start}.how-step:last-child{margin-bottom:0}.how-num{width:24px;height:24px;border-radius:50%;background:var(--accent);color:#0B0B0F;display:grid;place-items:center;font-weight:800;font-size:12px;flex-shrink:0}.how-text{flex:1;font-size:12px;color:var(--text);line-height:1.5}.how-text b{color:var(--accent)}.cat-emoji{font-size:24px}@media (min-width:600px){.hero h1{font-size:28px}}</style></head><body><div class="toast" id="toast"></div><header><div class="title"><span class="title-dot"></span>
+    📱 АйБарахолка
+  </div><button class="btn" id="btnOpen" type="button" onclick="window.__openModal && window.__openModal()">+ Подать</button></header><div class="hero"><h1>iPhone барахолка <span>без перекупов</span></h1><p>Продай, купи, обменяй — напрямую. Свой пост за 50⭐ — наверху ленты 24 часа.</p></div><div class="stats"><div class="stat active" id="stAll"    onclick="window.__setStatFilter && window.__setStatFilter('all',this)"   title="Все объявления"><b id="sTotal">0</b><span>объявлений</span><div class="stat-filter-hint">все</div></div><div class="stat"        id="stToday"  onclick="window.__setStatFilter && window.__setStatFilter('today',this)" title="Только за сегодня"><b id="sToday">0</b><span>сегодня</span><div class="stat-filter-hint">за 24 ч</div></div><div class="stat"        id="stOnline" onclick="window.__setStatFilter && window.__setStatFilter('online',this)" title="Сейчас онлайн (за час)"><b id="sOnline">∞</b><span>онлайн</span><div class="stat-filter-hint">за час</div></div></div><div class="filters" id="filters"><button class="filter active" type="button" data-cat="all" onclick="window.__setFilter && window.__setFilter(this,'all')">Все</button><button class="filter" type="button" data-cat="iphone" onclick="window.__setFilter && window.__setFilter(this,'iphone')">📱 iPhone</button><button class="filter" type="button" data-cat="airpods" onclick="window.__setFilter && window.__setFilter(this,'airpods')">🎧 AirPods</button><button class="filter" type="button" data-cat="ipad" onclick="window.__setFilter && window.__setFilter(this,'ipad')">📲 iPad</button><button class="filter" type="button" data-cat="mac" onclick="window.__setFilter && window.__setFilter(this,'mac')">💻 Mac</button></div><div class="listings" id="listings"><div class="empty-state"><div class="empty-state-icon">📦</div><div>Загрузка...</div></div></div><div style="padding:0 14px"><div class="how-it-works"><h3>💡 Как это работает</h3><div class="how-step"><div class="how-num">1</div><div class="how-text">Нажми <b>«+ Подать»</b>, заполни форму — это 1 минута</div></div><div class="how-step"><div class="how-num">2</div><div class="how-text">Выбери тариф: <b>Free</b> (0₽), <b>TOP</b> (50⭐), <b>VIP</b> (150⭐)</div></div><div class="how-step"><div class="how-num">3</div><div class="how-text">Оплати ⭐ Telegram Stars или 💳 картой прямо в WebApp</div></div><div class="how-step"><div class="how-num">4</div><div class="how-text">Объявление сразу в канале @ibaraholkatyt. Покупатели пишут тебе в Telegram.</div></div></div></div><div class="modal-bg" id="modal"><div class="modal"><h2>📱 Новое объявление</h2><label>Заголовок</label><input id="fTitle" type="text" value="iPhone 14 Pro 256GB"><label>Описание</label><textarea id="fDesc" rows="2">Отличное состояние, полный комплект</textarea><label>Цена, ₽</label><input id="fPrice" type="number" value="75000" min="0"><label>Категория</label><select id="fCat"><option value="iphone">📱 iPhone</option><option value="airpods">🎧 AirPods</option><option value="ipad">📲 iPad</option><option value="mac">💻 Mac</option></select><label>Контакт (Telegram)</label><input id="fContact" type="text" value="@Izdelie0810"><label>Тариф</label><div class="tier-row" id="tierRow"><button type="button" class="tier selected" data-tier="free" onclick="window.__pickTier && window.__pickTier(this,'free')"><b>Free</b><span>0 ₽</span></button><button type="button" class="tier" data-tier="premium" onclick="window.__pickTier && window.__pickTier(this,'premium')"><b>TOP 24ч</b><span>50⭐</span></button><button type="button" class="tier" data-tier="vip" onclick="window.__pickTier && window.__pickTier(this,'vip')"><b>VIP</b><span>150⭐</span></button></div><div class="modal-actions"><button type="button" class="btn btn-secondary" onclick="window.__closeModal && window.__closeModal()">Отмена</button><button type="button" class="btn" id="btnSubmit" onclick="window.__submit && window.__submit()">Опубликовать</button></div></div></div><nav class="bottom-nav"><button class="nav-item active" id="navFeed" type="button" onclick="window.__nav && window.__nav('feed',this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+    Лента
+  </button><button class="nav-item" id="navChat" type="button" onclick="window.__nav && window.__nav('chat',this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+    Чат
+  </button><button class="nav-item" id="navSell" type="button" onclick="window.__nav && window.__nav('sell',this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+    Продать
+  </button><button class="nav-item" id="navHelp" type="button" onclick="window.__nav && window.__nav('help',this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3M12 17h.01"/></svg>
+    Помощь
+  </button></nav><script>
+(function(){
+  'use strict';
+  var API = 'https://ibaraholka-bot.onrender.com';
+  var ADMIN_TOKEN = 'JBhQfVVY1h3Q0XOKld3Ri_iFTBiz1bqGBOqsyvs9_m4';
+  var FALLBACK_USER = {id: 748834052, first_name: 'Саша', username: 'Izdelie0810'};
+  var VERSION = 'v6.0-final';
+  var allListings = [];
+  var selectedTier = 'free';
+  // ===== Utilities =====
+  function esc(s) {
+    if (s == null) return '';
+    return String(s).replace(/[&<>"']/g, function(c) {
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+  }
+  function fmt(n) {
+    return (n || 0).toLocaleString('ru-RU');
+  }
+  function toast(msg, type) {
+    var t = document.getElementById('toast');
+    if (!t) return;
+    t.textContent = msg;
+    t.className = 'toast ' + (type || '');
+    t.style.display = 'block';
+    if (window.__toastTimer) clearTimeout(window.__toastTimer);
+    window.__toastTimer = setTimeout(function() { t.style.display = 'none'; }, 3500);
+  }
+  function getUser() {
+    try {
+      var tg = window.Telegram && window.Telegram.WebApp;
+      if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
+        var u = tg.initDataUnsafe.user;
+        return {id: u.id, first_name: u.first_name || 'User', username: u.username || ''};
+      }
+    } catch (e) {}
+    return FALLBACK_USER;
+  }
+  function getCategoryEmoji(cat) {
+    var map = {iphone: '📱', airpods: '🎧', ipad: '📲', mac: '💻'};
+    return map[cat] || '📦';
+  }
+  // ===== External open (Telegram-aware) =====
+  function openExternal(url, label) {
+    try {
+      var tg = window.Telegram && window.Telegram.WebApp;
+      if (tg && tg.openLink) {
+        tg.openLink(url);
+      } else if (tg && tg.openTelegramLink && url.indexOf('t.me/') === 8) {
+        tg.openTelegramLink(url.replace('https://', ''));
+      } else {
+        window.open(url, '_blank');
+      }
+    } catch (e) {
+      try { window.open(url, '_blank'); } catch (e2) {}
+    }
+  }
+  // ===== Modal =====
+  function openModal() {
+    var m = document.getElementById('modal');
+    if (m) {
+      m.classList.add('open');
+      m.style.display = 'flex';
+    }
+  }
+  function closeModal() {
+    var m = document.getElementById('modal');
+    if (m) {
+      m.classList.remove('open');
+      m.style.display = 'none';
+    }
+    var pm = document.getElementById('pay-modal');
+    if (pm) pm.remove();
+  }
+  function pickTier(el, tier) {
+    document.querySelectorAll('.tier').forEach(function(t){ t.classList.remove('selected'); });
+    el.classList.add('selected');
+    selectedTier = tier;
+  }
+  function setFilter(el, cat) {
+    document.querySelectorAll('.filter').forEach(function(f){ f.classList.remove('active'); });
+    el.classList.add('active');
+    document.querySelectorAll('.stat').forEach(function(s){ s.classList.remove('active'); });
+    document.getElementById('stAll').classList.add('active');
+    window.__statFilter = 'all';
+    renderListings();
+  }
+  function setStatFilter(mode, el) {
+    window.__statFilter = mode;
+    document.querySelectorAll('.stat').forEach(function(s){ s.classList.remove('active'); });
+    if (el) el.classList.add('active');
+    renderListings();
+  }
+  function nav(which, el) {
+    document.querySelectorAll('.nav-item').forEach(function(n){ n.classList.remove('active'); });
+    if (el) el.classList.add('active');
+    if (which === 'sell') openModal();
+    else if (which === 'chat') openChat();
+    else if (which === 'help') toast('🤖 Помощь: напиши /help боту @Ibaraholka_bot', 'ok');
+    else loadListings();
+  }
+  // ===== Встроенный AI-чат =====
+  function openChat() {
+    if (document.getElementById('chat-modal')) return;
+    var div = document.createElement('div');
+    div.id = 'chat-modal';
+    div.style.cssText = 'position:fixed;inset:0;background:#0B0B0F;z-index:300;display:flex;flex-direction:column';
+    div.innerHTML =
+      '<div style="padding:12px 14px;background:#14141A;border-bottom:1px solid #2A2A35;display:flex;align-items:center;justify-content:space-between">' +
+        '<div style="display:flex;align-items:center;gap:8px">' +
+          '<div style="width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#FF8A4C,#FFD700);color:#0B0B0F;display:grid;place-items:center;font-weight:800">S</div>' +
+          '<div>' +
+            '<div style="font-size:14px;font-weight:700">Саша-бот</div>' +
+            '<div style="font-size:11px;color:#9A9AA8;display:flex;align-items:center;gap:4px"><span style="width:6px;height:6px;border-radius:50%;background:#22C55E"></span>онлайн · отвечает за 1 сек</div>' +
+          '</div>' +
+        '</div>' +
+        '<button type="button" onclick="document.getElementById(\'chat-modal\').remove()" style="background:transparent;color:#9A9AA8;border:none;font-size:20px;cursor:pointer;padding:8px">✕</button>' +
+      '</div>' +
+      '<div id="chat-msgs" style="flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px">' +
+        '<div style="text-align:center;color:#9A9AA8;font-size:11px;padding:6px">' + new Date().toLocaleDateString('ru-RU', {day:'numeric', month:'long'}) + '</div>' +
+        '<div class="msg-row" style="display:flex;gap:8px;align-items:flex-end">' +
+          '<div style="width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#FF8A4C,#FFD700);color:#0B0B0F;display:grid;place-items:center;font-weight:700;font-size:11px;flex-shrink:0">S</div>' +
+          '<div style="background:#14141A;border:1px solid #2A2A35;border-radius:14px;border-bottom-left-radius:4px;padding:9px 12px;font-size:13px;line-height:1.5;max-width:75%">' +
+            '👋 Привет! Я Саша-бот — AI-ассистент АйБарахолки. Помогу выбрать iPhone, AirPods или технику Apple. Спрашивай!' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div style="padding:10px 12px;background:#14141A;border-top:1px solid #2A2A35;display:flex;gap:6px;align-items:flex-end">' +
+        '<textarea id="chat-input" placeholder="Сообщение..." rows="1" style="flex:1;background:#0B0B0F;border:1px solid #2A2A35;border-radius:10px;padding:9px 11px;font-size:13px;color:#F5F5F7;font-family:inherit;resize:none;max-height:80px"></textarea>' +
+        '<button type="button" onclick="window.__sendChat()" style="background:#FF8A4C;color:#0B0B0F;border:none;border-radius:10px;padding:9px 12px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit">▶</button>' +
+      '</div>';
+    document.body.appendChild(div);
+    var input = document.getElementById('chat-input');
+    input.focus();
+    input.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        window.__sendChat();
+      }
+    });
+  }
+  function sendChat() {
+    var input = document.getElementById('chat-input');
+    var text = (input.value || '').trim();
+    if (!text) return;
+    // Добавляем сообщение юзера
+    var ms = document.getElementById('chat-msgs');
+    var userMsg = document.createElement('div');
+    userMsg.style.cssText = 'display:flex;justify-content:flex-end;margin-bottom:10px';
+    userMsg.innerHTML =
+      '<div style="background:#FF8A4C;color:#0B0B0F;border-radius:14px;border-bottom-right-radius:4px;padding:9px 12px;font-size:13px;line-height:1.5;max-width:75%;white-space:pre-wrap">' + esc(text) + '</div>';
+    ms.appendChild(userMsg);
+    input.value = '';
+    ms.scrollTop = ms.scrollHeight;
+    // Имитация "бот думает"
+    var thinking = document.createElement('div');
+    thinking.id = 'chat-thinking';
+    thinking.style.cssText = 'display:flex;gap:8px;align-items:flex-end';
+    thinking.innerHTML =
+      '<div style="width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#FF8A4C,#FFD700);color:#0B0B0F;display:grid;place-items:center;font-weight:700;font-size:11px;flex-shrink:0">S</div>' +
+      '<div style="background:#14141A;border:1px solid #2A2A35;border-radius:14px;padding:9px 12px;display:flex;gap:4px">' +
+        '<span style="width:6px;height:6px;border-radius:50%;background:#9A9AA8;animation:typing 1.4s infinite"></span>' +
+        '<span style="width:6px;height:6px;border-radius:50%;background:#9A9AA8;animation:typing 1.4s infinite .2s"></span>' +
+        '<span style="width:6px;height:6px;border-radius:50%;background:#9A9AA8;animation:typing 1.4s infinite .4s"></span>' +
+      '</div>';
+    ms.appendChild(thinking);
+    ms.scrollTop = ms.scrollHeight;
+    // Ответ бота через 0.8 сек
+    setTimeout(function() {
+      var t = thinking.parentNode;
+      if (thinking) t.removeChild(thinking);
+      var reply = generateAIReply(text);
+      var botMsg = document.createElement('div');
+      botMsg.style.cssText = 'display:flex;gap:8px;align-items:flex-end;margin-bottom:10px';
+      botMsg.innerHTML =
+        '<div style="width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#FF8A4C,#FFD700);color:#0B0B0F;display:grid;place-items:center;font-weight:700;font-size:11px;flex-shrink:0">S</div>' +
+        '<div style="background:#14141A;border:1px solid #2A2A35;border-radius:14px;border-bottom-left-radius:4px;padding:9px 12px;font-size:13px;line-height:1.5;max-width:75%;white-space:pre-wrap">' + reply + '</div>';
+      ms.appendChild(botMsg);
+      ms.scrollTop = ms.scrollHeight;
+    }, 800);
+  }
+  function generateAIReply(text) {
+    var t = text.toLowerCase();
+    if (/привет|хай|здаров/.test(t)) return '👋 Привет! Чем помочь? У нас свежие iPhone 14/15, AirPods Pro 2. Цены от 22 000₽.';
+    if (/цена|сколько|стоим/.test(t)) return '📊 iPhone 13 от 39 900₽, iPhone 14 Pro от 75 000₽, AirPods Pro 2 — 22 000₽. Все цены ниже магазина на 15-30%.';
+    if (/iphone|айфон/.test(t)) return '📱 Какой iPhone ищете? 13/14/15? Сколько памяти? Расскажите — подберу лучший вариант.';
+    if (/airpods|наушник/.test(t)) return '🎧 AirPods Pro 2 (USB-C) — 22 000₽, новые. AirPods 3 — 15 000₽. Какие интересуют?';
+    if (/доставк|курьер|сдэк/.test(t)) return '🚚 Самовывоз в Москве бесплатно (м. Аэропорт). По Москве 500₽, по РФ — СДЭК 300-800₽.';
+    if (/гаранти|безопасн/.test(t)) return '🛡 При встрече проверяем серийник, батарею, iCloud. Если что-то не так — возврат Stars за 7 дней.';
+    if (/торг|скидк/.test(t)) return '🤝 Торг уместен до 10%. Цены и так ниже магазина. Свяжитесь с продавцом.';
+    if (/продать|продам/.test(t)) return '💼 Создать объявление → @Ibaraholka_bot → «+ Подать». 50⭐ TOP / 150⭐ VIP. Объявление сразу в канале!';
+    if (/спасибо|благодарю/.test(t)) return '🙌 Рад помочь! Если будут вопросы — пишите.';
+    if (/как дела|как сам/.test(t)) return '🤖 Работаю 24/7, учусь на каждом диалоге! Скоро стану совсем как живой 😄';
+    return '🤔 Понял. Уточните вопрос — подробнее отвечу. Или напишите конкретно: модель, цена, доставка.';
+  }
+  // ===== Submit =====
+  async function submit() {
+    var user = getUser();
+    var data = {
+      title: (document.getElementById('fTitle').value || '').trim() || 'iPhone',
+      desc: (document.getElementById('fDesc').value || '').trim(),
+      price: parseInt(document.getElementById('fPrice').value) || 0,
+      cat: document.getElementById('fCat').value,
+      type: 'sell',
+      contact: (document.getElementById('fContact').value || '').trim() || ('@' + user.username),
+      tier: selectedTier,
+    };
+    if (!data.title || !data.price || data.price <= 0) {
+      toast('⚠️ Заполни название и цену', 'err');
+      return;
+    }
+    if (!data.contact) {
+      toast('⚠️ Укажи контакт', 'err');
+      return;
+    }
+    var btn = document.getElementById('btnSubmit');
+    btn.disabled = true;
+    btn.textContent = '⏳ Создаю...';
+    // Используем plain object headers — работает на ВСЕХ WebView включая старый iOS Telegram
+    var fetchHeaders = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'X-Admin-Token': String(ADMIN_TOKEN),
+      'X-Admin-User-Id': String(user.id || 0),
+      'X-Admin-User-Name': 'User',  // ASCII only
+      'X-Admin-User-Username': String(user.username || '').replace(/[^a-zA-Z0-9_]/g, '') || 'user',
+    };
+    var r;
+    try {
+      r = await fetch(API + '/listings', {
+        method: 'POST',
+        headers: fetchHeaders,
+        body: JSON.stringify(data),
+      });
+    } catch (e1) {
+      // Fallback: попробуем с Headers() если первый способ не сработал
+      try {
+        var h = new Headers();
+        h.append('Content-Type', 'application/json');
+        h.append('X-Admin-Token', String(ADMIN_TOKEN));
+        h.append('X-Admin-User-Id', String(user.id || 0));
+        r = await fetch(API + '/listings', {
+          method: 'POST',
+          headers: h,
+          body: JSON.stringify(data),
+        });
+      } catch (e2) {
+        toast('❌ Не удалось отправить: ' + e1.message, 'err');
+        btn.disabled = false;
+        btn.textContent = 'Опубликовать';
+        return;
+      }
+    }
+    var j;
+    try { j = await r.json(); } catch (e) { j = {detail: r.statusText}; }
+    if (r.ok) {
+      if (j.invoice_sent) {
+        toast('✅ Создано! Invoice в личке у бота', 'gold');
+        showPaymentModal(data, j);
+      } else if (data.tier === 'free') {
+        toast('✅ Объявление опубликовано бесплатно', 'ok');
+        setTimeout(function() { closeModal(); loadListings(); }, 1200);
+      } else {
+        toast('⚠️ Создано! Оплатите через Тинькофф', 'err');
+        showPaymentModal(data, j);
+      }
+    } else {
+      toast('❌ ' + (j.detail || ('Ошибка ' + r.status)), 'err');
+    }
+    btn.disabled = false;
+    btn.textContent = 'Опубликовать';
+  }
+  // ===== Payment modal =====
+  function showPaymentModal(item, result) {
+    var old = document.getElementById('pay-modal');
+    if (old) old.remove();
+    var stars = item.tier === 'vip' ? 150 : (item.tier === 'premium' ? 50 : 0);
+    var rub = Math.round(stars * 1.4);
+    var isFree = item.tier === 'free';
+    var div = document.createElement('div');
+    div.id = 'pay-modal';
+    div.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:200;display:flex;align-items:center;justify-content:center;padding:14px;overflow-y:auto;-webkit-overflow-scrolling:touch';
+    if (isFree) {
+      div.innerHTML =
+        '<div style="background:#1A1A22;border:1px solid #2A2A35;border-radius:20px;padding:24px;max-width:380px;width:100%;text-align:center">' +
+          '<div style="font-size:48px;margin-bottom:12px">✅</div>' +
+          '<div style="font-size:18px;font-weight:700;margin-bottom:6px">Бесплатное объявление</div>' +
+          '<div style="color:#9A9AA8;font-size:13px;margin-bottom:14px">Опубликовано без оплаты</div>' +
+          '<div style="background:#0B0B0F;border-radius:10px;padding:10px;margin-bottom:14px;font-family:monospace;font-size:11px;color:#FF8A4C;word-break:break-all">' + esc(result.id) + '</div>' +
+          '<button type="button" class="pay-btn" style="background:#22C55E;color:#0B0B0F" onclick="window.__payClose && window.__payClose(true)">Готово</button>' +
+        '</div>';
+    } else {
+      var tierLabel = item.tier === 'vip' ? 'VIP 7 дней' : 'TOP 24 часа';
+      div.innerHTML =
+        '<div style="background:#1A1A22;border:1px solid #FF8A4C;border-radius:20px;padding:22px;max-width:380px;width:100%">' +
+          '<div style="text-align:center">' +
+            '<div style="font-size:48px;margin-bottom:8px">⭐</div>' +
+            '<div style="font-size:18px;font-weight:700;margin-bottom:4px">Оплата</div>' +
+            '<div style="color:#9A9AA8;font-size:12px;margin-bottom:14px">' + esc(tierLabel) + '</div>' +
+          '</div>' +
+          '<div style="background:#0B0B0F;border-radius:12px;padding:14px;margin-bottom:14px;text-align:center">' +
+            '<div style="color:#9A9AA8;font-size:11px">К оплате</div>' +
+            '<div style="font-size:30px;font-weight:700;color:#FF8A4C">' + stars + ' ⭐</div>' +
+            '<div style="color:#9A9AA8;font-size:11px;margin-top:3px">или ' + rub + ' ₽ картой</div>' +
+          '</div>' +
+          '<div style="font-size:10px;color:#9A9AA8;margin-bottom:12px;text-align:center;font-family:monospace">' + esc(result.id) + '</div>' +
+          '<button type="button" class="pay-btn" style="background:linear-gradient(135deg,#FFD700,#FF8A4C);color:#0B0B0F" onclick="window.__payStars && window.__payStars(\'' + esc(result.id) + '\')">⭐ Оплатить Telegram Stars</button>' +
+          '<div style="text-align:center;margin:10px 0 6px;color:rgba(255,255,255,0.4);font-size:11px">— или картой через Тинькофф —</div>' +
+          '<a class="pay-btn" style="background:linear-gradient(135deg,#FFDD2D,#FFCC00);color:#0B0B0F;text-decoration:none;display:flex;align-items:center;justify-content:center;font-weight:800" href="https://www.tbank.ru/rm/r_TGugYbYVEb.mLmrPUwlTy/aHI4Y75190" target="_blank" rel="noopener noreferrer">💳 Оплатить через Тинькофф</a>' +
+          '<div style="font-size:9px;color:#9A9AA8;text-align:center;margin-bottom:8px">Сумма: <b>' + rub + ' ₽</b></div>' +
+          '<div style="text-align:center;margin:10px 0 6px;color:rgba(255,255,255,0.4);font-size:11px">— или криптой TON —</div>' +
+          '<button type="button" class="pay-btn" id="miniTonBtn" data-lid="' + esc(result.id) + '" data-tier="' + esc(item.tier) + '" style="background:linear-gradient(135deg,#0098EA,#3DDC97);color:#fff">💎 Оплатить TON</button>' +
+          '<div id="miniTonPanel" style="display:none;margin-top:10px;padding:12px;background:rgba(0,152,234,.1);border:1px solid rgba(0,152,234,.35);border-radius:12px;font-size:12px;line-height:1.5">' +
+            '<div style="color:#3DDC97;font-weight:700;margin-bottom:6px">Отправьте <span id="miniTonAmt">—</span> TON</div>' +
+            '<div style="font-size:10px;color:#9A9AA8;margin-bottom:4px">на кошелёк:</div>' +
+            '<code id="miniTonWallet" style="display:block;word-break:break-all;color:#0098EA;font-family:monospace;font-size:10px;padding:6px;background:#0B0B0F;border-radius:6px;margin-bottom:8px">…</code>' +
+            '<div style="font-size:10px;color:#9A9AA8;margin-bottom:4px">с комментарием (без него оплата не засчитается!):</div>' +
+            '<code id="miniTonComment" style="display:block;word-break:break-all;color:#FFD700;font-family:monospace;font-size:10px;padding:6px;background:#0B0B0F;border-radius:6px">…</code>' +
+            '<button type="button" class="pay-btn" id="miniTonVerify" style="margin-top:10px;background:#3DDC97;color:#0B0B0F">✅ Я оплатил — проверить</button>' +
+            '<div id="miniTonStatus" style="font-size:10px;color:#9A9AA8;margin-top:6px;min-height:14px"></div>' +
+          '</div>' +
+          '<div class="pay-info">' +
+            '⭐ <b>Stars</b> — оплата внутри Telegram без закрытия WebApp.<br>' +
+            '💳 <b>Тинькофф</b> — оплата картой через банк.<br>' +
+            '💎 <b>TON</b> — перевод из Tonkeeper/MyTonWallet, проверка в блокчейне.' +
+          '</div>' +
+          '<button type="button" class="pay-close" onclick="window.__payClose && window.__payClose(true)">Закрыть</button>' +
+        '</div>';
+    }
+    document.body.appendChild(div);
+    // === Wire TON inline mini-modal (only when tier is paid) ===
+    if (!isFree) {
+      var miniBtn = document.getElementById('miniTonBtn');
+      var miniPanel = document.getElementById('miniTonPanel');
+      var miniVerify = document.getElementById('miniTonVerify');
+      var miniStatus = document.getElementById('miniTonStatus');
+      var miniState = null;
+      miniBtn.onclick = async function() {
+        if (miniPanel.style.display === 'block' && miniState) {
+          miniPanel.style.display = 'none';
+          miniBtn.textContent = '💎 Оплатить TON';
+          return;
+        }
+        miniBtn.disabled = true;
+        miniBtn.textContent = '⏳ Создаю платёж…';
+        try {
+          var r = await fetch(API + '/payments/ton/create', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({listing_id: result.id, tier: item.tier})
+          });
+          var data = await r.json();
+          if (!data.ok) {
+            miniStatus.style.color = '#FF6B6B';
+            miniStatus.textContent = '⚠️ ' + (data.error || 'ошибка');
+            miniBtn.disabled = false;
+            miniBtn.textContent = '💎 Оплатить TON';
+            return;
+          }
+          miniState = data;
+          document.getElementById('miniTonAmt').textContent = data.amount_ton;
+          document.getElementById('miniTonWallet').textContent = data.wallet;
+          document.getElementById('miniTonComment').textContent = data.comment;
+          miniStatus.style.color = '#9A9AA8';
+          miniStatus.innerHTML = 'Откройте <b>Tonkeeper</b> · отправьте ' + data.amount_ton + ' TON · комментарий обязателен';
+          miniPanel.style.display = 'block';
+          miniBtn.textContent = '💎 Свернуть';
+          miniBtn.disabled = false;
+        } catch (e) {
+          miniStatus.style.color = '#FF6B6B';
+          miniStatus.textContent = '⚠️ ' + e.message;
+          miniBtn.disabled = false;
+          miniBtn.textContent = '💎 Оплатить TON';
+        }
+      };
+      miniVerify.onclick = async function() {
+        if (!miniState) return;
+        miniVerify.disabled = true;
+        miniVerify.textContent = '⏳ Проверяю блокчейн…';
+        miniStatus.style.color = '#FFD700';
+        miniStatus.textContent = 'Ищу транзакцию в блокчейне…';
+        try {
+          var tgUser = (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initDataUnsafe && window.Telegram.WebApp.initDataUnsafe.user) || null;
+          var uid = tgUser ? tgUser.id : 0;
+          var r = await fetch(API + '/payments/ton/verify', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({listing_id: result.id, comment: miniState.comment, user_id: uid})
+          });
+          var data = await r.json();
+          if (data.ok && data.verified) {
+            miniStatus.style.color = '#3DDC97';
+            miniStatus.innerHTML = '✅ <b>Оплата подтверждена!</b> Объявление активировано.';
+            miniVerify.textContent = '✓ Готово';
+            // Reuse the big green success modal
+            setTimeout(function() {
+              showPaymentSuccess(result.id, {tier: item.tier, channel_message_id: null, is_active: true}, 'TON');
+            }, 500);
+          } else {
+            miniStatus.style.color = '#FF8A4C';
+            miniStatus.textContent = '⏳ ' + (data.error || 'ещё не вижу транзакцию. Подождите 30с и нажмите снова.');
+            miniVerify.disabled = false;
+            miniVerify.textContent = '✅ Я оплатил — проверить';
+          }
+        } catch (e) {
+          miniStatus.style.color = '#FF6B6B';
+          miniStatus.textContent = '⚠️ ' + e.message;
+          miniVerify.disabled = false;
+          miniVerify.textContent = '✅ Я оплатил — проверить';
+        }
+      };
+      // (ЮMoney / ЮKassa удалены: quickpay-form устарел, отдаёт 404)
+    }
+  }
+  function payStars(listingId) {
+    // Click Stars -> open bot chat, then poll /listings/{id}/status every 2s.
+    // When backend marks listing as 'active' (successful_payment handler fires),
+    // we show the green ✅ modal and reload the feed.
+    toast('⭐ Оплатите в личке у бота, окно само обновится', 'gold');
+    openExternal('https://t.me/Ibaraholka_bot', 'Stars');
+    pollUntilActive(listingId, 'Stars');
+  }
+
+  async function pollUntilActive(listingId, method) {
+    // Wait for backend successful_payment / ton verify / admin approve to flip
+    // status from awaiting_payment -> active. We poll /listings/{id}/status.
+    var pm = document.getElementById('pay-modal');
+    // Add status line into the modal
+    var statusDiv = document.getElementById('pay-poll-status');
+    if (!statusDiv && pm) {
+      statusDiv = document.createElement('div');
+      statusDiv.id = 'pay-poll-status';
+      statusDiv.style.cssText = 'text-align:center;font-size:12px;color:#FFD700;margin-top:8px;min-height:18px';
+      var info = pm.querySelector('.pay-info');
+      if (info) pm.insertBefore(statusDiv, info);
+      else pm.querySelector('div[style*="border-radius:20px"]').appendChild(statusDiv);
+    }
+    var tries = 0;
+    var maxTries = 150; // 5 min @ 2s
+    while (tries < maxTries) {
+      tries++;
+      await new Promise(function(r) { setTimeout(r, 2000); });
+      try {
+        var r = await fetch(API + '/listings/' + encodeURIComponent(listingId) + '/status?_t=' + Date.now(), {
+          cache: 'no-cache',
+          headers: { 'cache-control': 'no-cache' }
+        });
+        if (!r.ok) continue;
+        var j = await r.json();
+        if (j.ok && j.is_active) {
+          showPaymentSuccess(listingId, j, method);
+          return;
+        }
+        if (statusDiv) {
+          var secsLeft = (maxTries - tries) * 2;
+          statusDiv.innerHTML = '⏳ Жду подтверждения оплаты… (' + Math.floor(secsLeft / 60) + ':' + String(secsLeft % 60).padStart(2, '0') + ')';
+        }
+      } catch (e) {
+        // network blip — keep polling
+      }
+    }
+    if (statusDiv) {
+      statusDiv.style.color = '#FF6B6B';
+      statusDiv.innerHTML = '⚠️ Таймаут 5 мин. Если оплатили — пришлите боту скриншот чека.';
+    }
+  }
+
+  function showPaymentSuccess(listingId, status, method) {
+    var old = document.getElementById('pay-success');
+    if (old) old.remove();
+    var div = document.createElement('div');
+    div.id = 'pay-success';
+    div.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.95);z-index:300;display:flex;align-items:center;justify-content:center;padding:14px;-webkit-overflow-scrolling:touch';
+    var tierLabel = status.tier === 'vip' ? 'VIP 7 дней' : (status.tier === 'premium' ? 'TOP 24 часа' : status.tier);
+    var inChannel = !!status.channel_message_id;
+    div.innerHTML =
+      '<div style="background:#1A1A22;border:1px solid #22C55E;border-radius:20px;padding:28px 24px;max-width:380px;width:100%;text-align:center;animation:payPop 0.4s cubic-bezier(0.34,1.56,0.64,1)">' +
+        '<style>'+'@keyframes payPop{0%{transform:scale(0.7);opacity:0}60%{transform:scale(1.06);opacity:1}100%{transform:scale(1);opacity:1}}'+'@keyframes payCheck{0%{stroke-dashoffset:60}100%{stroke-dashoffset:0}}'+'@keyframes payRing{0%{transform:scale(0);opacity:0.6}100%{transform:scale(1.6);opacity:0}}'+'</style>' +
+        '<div style="position:relative;width:96px;height:96px;margin:0 auto 16px">' +
+          '<div style="position:absolute;inset:0;border-radius:50%;background:#22C55E;opacity:0.25;animation:payRing 1.2s ease-out infinite"></div>' +
+          '<svg viewBox="0 0 64 64" style="position:relative;width:96px;height:96px">' +
+            '<circle cx="32" cy="32" r="30" fill="#22C55E"/>' +
+            '<path d="M18 33 L28 43 L46 24" stroke="#fff" stroke-width="6" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="60" style="animation:payCheck 0.5s 0.1s ease-out both"/>' +
+          '</svg>' +
+        '</div>' +
+        '<div style="font-size:22px;font-weight:800;color:#22C55E;margin-bottom:6px">Оплачено!</div>' +
+        '<div style="font-size:14px;color:#9A9AA8;margin-bottom:14px">' + esc(tierLabel) + ' · способ: ' + esc(method || '') + '</div>' +
+        '<div style="background:#0B0B0F;border-radius:10px;padding:10px;margin-bottom:14px;font-family:monospace;font-size:11px;color:#FF8A4C;word-break:break-all">' + esc(listingId) + '</div>' +
+        '<div style="display:flex;align-items:center;justify-content:center;gap:8px;background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.3);border-radius:12px;padding:12px;margin-bottom:14px">' +
+          '<span style="font-size:20px">📢</span>' +
+          '<div style="text-align:left;font-size:12px;line-height:1.4">' +
+            '<div style="color:#22C55E;font-weight:700">' + (inChannel ? 'Опубликовано в канале' : 'Уходит в канал @ibaraholkatyt…') + '</div>' +
+            '<div style="color:#9A9AA8;font-size:11px">' + (inChannel ? 'Сообщение #' + status.channel_message_id + ' в @ibaraholkatyt' : 'Публикация обычно &lt; 2 сек') + '</div>' +
+          '</div>' +
+        '</div>' +
+        '<button type="button" class="pay-btn" style="background:#22C55E;color:#0B0B0F" onclick="window.__paySuccessClose && window.__paySuccessClose()">Супер, готово</button>' +
+      '</div>';
+    document.body.appendChild(div);
+    // Haptic feedback
+    try {
+      if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.HapticFeedback) {
+        window.Telegram.WebApp.HapticFeedback.notificationOccurred('success');
+      }
+    } catch (e) {}
+  }
+
+  function paySuccessClose() {
+    var ps = document.getElementById('pay-success');
+    if (ps) ps.remove();
+    var pm = document.getElementById('pay-modal');
+    if (pm) pm.remove();
+    closeModal();
+    loadListings();
+  }
+
+  function payClose(reload) {
+    var pm = document.getElementById('pay-modal');
+    if (pm) pm.remove();
+    if (reload) { closeModal(); loadListings(); }
+  }
+  function writeContact(username) {
+    if (!username) return;
+    openExternal('https://t.me/' + username, 'Write');
+  }
+  // ===== Listings =====
+  async function loadListings() {
+    var list = document.getElementById('listings');
+    if (list && !allListings.length) {
+      list.innerHTML =
+        '<div class="empty-state">' +
+        '<div class="empty-state-icon">📦</div>' +
+        '<div>Загружаю ленту…</div>' +
+        '<div style="font-size:11px;margin-top:6px;color:var(--muted)">первый запуск может занять до 30 с — Render просыпается</div>' +
+        '</div>';
+    }
+    var activeCat = (document.querySelector('.filter.active') || {}).dataset?.cat || 'all';
+    var statMode = window.__statFilter || 'all';
+    var params = [];
+    if (activeCat && activeCat !== 'all') params.push('cat=' + activeCat);
+    if (statMode === 'today') params.push('since=24h');
+    else if (statMode === 'online') params.push('since=1h');
+    params.push('_t=' + Date.now());
+    var url = API + '/listings' + (params.length ? '?' + params.join('&') : '');
+    var controller = new AbortController();
+    var timeoutId = setTimeout(function() { controller.abort(); }, 20000);
+    try {
+      var headers = { 'cache-control': 'no-cache' };
+      if (window.__lastEtag) headers['if-none-match'] = window.__lastEtag;
+      var r = await fetch(url, { cache: 'no-cache', signal: controller.signal, headers: headers });
+      clearTimeout(timeoutId);
+      if (r.status === 304) {
+        // No changes — keep existing data
+        renderListings();
+        return;
+      }
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      window.__lastEtag = r.headers.get('etag') || '';
+      allListings = await r.json();
+      try { localStorage.setItem('ibaraholka:listings', JSON.stringify(allListings)); } catch (e) {}
+      document.getElementById('sTotal').textContent = allListings.length;
+      var todayStart = Math.floor(Date.now() / 1000) - 86400;
+      var today = allListings.filter(function(l) { return (l.created || 0) >= todayStart; }).length;
+      document.getElementById('sToday').textContent = today;
+      var hourAgo = Math.floor(Date.now() / 1000) - 3600;
+      var seen = {};
+      allListings.forEach(function(l) {
+        if ((l.created || 0) >= hourAgo && l.user_id) seen[l.user_id] = true;
+      });
+      document.getElementById('sOnline').textContent = Object.keys(seen).length || '0';
+      renderListings();
+    } catch (e) {
+      clearTimeout(timeoutId);
+      var msg = (e.name === 'AbortError') ? 'сервер не отвечает (таймаут 20 с) — нажмите «Повторить»' : esc(e.message);
+      if (list) list.innerHTML =
+        '<div class="empty-state"><div class="empty-state-icon">⚠️</div>' +
+        '<div>Не удалось загрузить</div>' +
+        '<div style="font-size:11px;margin-top:6px;color:var(--red)">' + msg + '</div>' +
+        '<button type="button" class="btn" style="margin-top:14px" onclick="window.__loadListings && window.__loadListings()">Повторить</button>' +
+        '</div>';
+    }
+  }
+  function renderListings() {
+    var activeCat = (document.querySelector('.filter.active') || {}).dataset?.cat || 'all';
+    var statMode = window.__statFilter || 'all';
+    var now = Math.floor(Date.now() / 1000);
+    var todayStart = now - 86400;
+    var hourAgo = now - 3600;
+    var filtered = allListings.filter(function(l) {
+      if (activeCat !== 'all' && l.cat !== activeCat) return false;
+      if (statMode === 'today' && (l.created || 0) < todayStart) return false;
+      if (statMode === 'online' && ((l.created || 0) < hourAgo)) return false;
+      return true;
+    });
+    filtered.sort(function(a, b) { return (b.created || 0) - (a.created || 0); });
+    var listings = document.getElementById('listings');
+    var hintText = '';
+    if (statMode === 'today') hintText = 'объявления за сегодня';
+    else if (statMode === 'online') hintText = 'объявления за последний час';
+    var headerHtml = hintText
+      ? '<div style="padding:8px 4px;color:var(--muted);font-size:12px">— ' + hintText + ' (' + filtered.length + ')</div>'
+      : '';
+    if (filtered.length === 0) {
+      listings.innerHTML = headerHtml +
+        '<div class="empty-state"><div class="empty-state-icon">📦</div>' +
+        '<div>Пока нет объявлений</div>' +
+        (statMode === 'today'
+          ? '<div style="font-size:11px;color:var(--muted);margin-top:6px">за последние 24 часа никто не подал</div>'
+          : (statMode === 'online'
+              ? '<div style="font-size:11px;color:var(--muted);margin-top:6px">за последний час никто не подал</div>'
+              : '<div style="margin-top:12px"><button type="button" class="btn" onclick="window.__openModal && window.__openModal()">+ Создать первое</button></div>')) +
+        '</div>';
+      return;
+    }
+    listings.innerHTML = headerHtml + filtered.map(function(l) {
+      var tierClass = l.tier === 'vip' ? 'b-vip' : (l.tier === 'premium' ? 'b-top' : 'b-free');
+      var tierLabel = l.tier === 'vip' ? '👑 VIP' : (l.tier === 'premium' ? '⭐ TOP' : '📝 Free');
+      var contact = (l.contact || '').replace('@', '').replace(/[^a-zA-Z0-9_]/g, '');
+      var emoji = getCategoryEmoji(l.cat);
+      var date = new Date((l.created || 0) * 1000).toLocaleDateString('ru-RU', {day: 'numeric', month: 'short'});
+      return '<div class="listing">' +
+        '<div class="listing-img">' + emoji + '</div>' +
+        '<div class="listing-body">' +
+          '<span class="badge ' + tierClass + '">' + tierLabel + '</span>' +
+          '<h3>' + esc(l.title || '') + '</h3>' +
+          '<div class="price">' + fmt(l.price) + ' ₽</div>' +
+          '<div class="meta">@' + esc(contact) + ' · ' + date + '</div>' +
+          '<button type="button" class="btn-write" onclick="window.__writeContact && window.__writeContact(\'' + esc(contact) + '\')">Написать</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+  }
+  // ===== Expose to inline onclick =====
+  window.__openModal = openModal;
+  window.__closeModal = closeModal;
+  window.__submit = submit;
+  window.__pickTier = pickTier;
+  window.__setFilter = setFilter;
+  window.__setStatFilter = setStatFilter;
+  window.__statFilter = 'all';
+  window.__nav = nav;
+  window.__openChat = openChat;
+  window.__sendChat = sendChat;
+  window.__payStars = payStars;
+  window.__payClose = payClose;
+  window.__paySuccessClose = paySuccessClose;
+  window.__writeContact = writeContact;
+  window.__loadListings = loadListings;
+  // ===== Init =====
+  function init() {
+    try {
+      var tg = window.Telegram && window.Telegram.WebApp;
+      if (tg) {
+        tg.ready();
+        // 1. Раскрываем на весь экран
+        tg.expand();
+        // 2. Запрашиваем полноэкранный режим (Telegram 7.0+)
+        if (tg.requestFullscreen) {
+          try { tg.requestFullscreen(); } catch (e) {}
+        }
+        // 3. Отключаем подтверждение закрытия (плавный UX)
+        if (tg.enableClosingConfirmation !== undefined) {
+          tg.enableClosingConfirmation = false;
+        }
+        // 4. Устанавливаем цвета под наш dark theme
+        if (tg.setHeaderColor) {
+          try { tg.setHeaderColor('#0B0B0F'); } catch (e) {}
+          try { tg.setBackgroundColor('#0B0B0F'); } catch (e) {}
+        }
+        // 5. Скрываем main button если нет действий (на старте нет смысла)
+        if (tg.MainButton) {
+          try { tg.MainButton.hide(); } catch (e) {}
+        }
+        // 6. Блокируем вертикальные свайпы на закрытие
+        if (tg.isVerticalSwipesEnabled !== undefined) {
+          tg.isVerticalSwipesEnabled = false;
+        }
+        log('Telegram WebApp: fullscreen mode активирован');
+      } else {
+        log('Running in browser (no Telegram SDK)');
+      }
+    } catch (e) { log('Telegram err: ' + e, 'err'); }
+    // 5. Instant render из localStorage пока грузим с сервера
+    try {
+      var cached = localStorage.getItem('ibaraholka:listings');
+      if (cached) {
+        allListings = JSON.parse(cached);
+        renderListings();
+        log('⚡ Показано из кеша (' + allListings.length + ' объявлений)');
+      }
+    } catch (e) {}
+    loadListings();
+    setInterval(loadListings, 60000);
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+</script></body></html>

@@ -1332,6 +1332,31 @@ def list_listings(
         return resp
 
 
+@app.get("/listings/{listing_id}/status")
+def listing_status(listing_id: str):
+    """Lightweight status endpoint for Mini App to poll after payment.
+
+    Returns tier/status/created/ch_msg so the Mini App can show a green
+    checkmark and close the pay-modal the moment the listing is active.
+    """
+    with db_cursor() as conn:
+        row = conn.execute(
+            "SELECT id, status, tier, created, channel_message_id FROM listings WHERE id=?",
+            (listing_id,),
+        ).fetchone()
+    if not row:
+        return {"ok": False, "error": "not_found"}
+    return {
+        "ok": True,
+        "id": row["id"],
+        "status": row["status"],
+        "tier": row["tier"],
+        "created": row["created"],
+        "channel_message_id": row["channel_message_id"],
+        "is_active": row["status"] == "active",
+    }
+
+
 @app.post("/listings")
 async def create_listing(item: ListingIn, request: Request):
     """Create new listing. Requires Telegram WebApp Authorization.
