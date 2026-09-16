@@ -1186,7 +1186,9 @@ def debug_state():
         "module_CHANNEL_ID": CHANNEL_ID,
         "bot_initialized": bot is not None,
         "dp_initialized": dp is not None,
-        "railway_git_commit_sha": os.getenv("RAILWAY_GIT_COMMIT_SHA", "N/A")[:8],
+        "railway_git_commit_sha": (os.getenv("RENDER_GIT_COMMIT_SHA") or os.getenv("RAILWAY_GIT_COMMIT_SHA") or "N/A")[:8],
+        "render_service_id": os.getenv("RENDER_SERVICE_ID", "N/A"),
+        "render_external_url": os.getenv("RENDER_EXTERNAL_URL", "N/A"),
     }
     try:
         with db_cursor() as conn:
