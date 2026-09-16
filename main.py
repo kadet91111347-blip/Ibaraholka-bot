@@ -2359,6 +2359,11 @@ async def ads_start(request: Request, user: Dict = Depends(get_user)):
     if not ad_id:
         raise HTTPException(400, "ad_id required")
 
+    try:
+        _seed_ads_if_empty()
+    except Exception as e:
+        logging.warning("seed_ads in /ads/start failed: %s", e)
+
     with db_cursor() as conn:
         # Cancel any prior pending views (user clicked again on a new ad)
         conn.execute(
