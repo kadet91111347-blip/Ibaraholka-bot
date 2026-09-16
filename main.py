@@ -1498,7 +1498,6 @@ async def debug_force_match_notify(listing_id: str):
             contact="@test",
             tier=_g(row, "tier", 12) or "free",
         )
-        logger.info(f"DEBUG force: listing_id={listing_id} item.cat={item.cat!r} item.title={item.title!r} item.description={item.description!r} item.city={item.city!r}")
         user_dict = {"id": int(_g(row, "user_id", 0)), "first_name": "S", "username": "s"}
         # Make sure _notify_match_subscribers' logger.info reaches our response
         logger.setLevel(logging.INFO)
@@ -1514,6 +1513,7 @@ async def debug_force_match_notify(listing_id: str):
         h.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
         logging.getLogger().addHandler(h)
         try:
+            logger.info(f"DEBUG force: listing_id={listing_id} item.cat={item.cat!r} item.title={item.title!r} item.description={item.description!r} item.city={item.city!r}")
             await _notify_match_subscribers(listing_id, item, user_dict, 99999)
         finally:
             logging.getLogger().removeHandler(h)
