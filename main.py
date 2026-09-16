@@ -5049,8 +5049,8 @@ async def profile_me(user: Dict[str, Any] = Depends(get_user)):
             "SELECT * FROM listings WHERE user_id = ? AND status = 'active' ORDER BY created DESC LIMIT 50", (uid,)
         ).fetchall()]
         my_total_rows = conn.execute("SELECT COUNT(*) AS n FROM listings WHERE user_id = ? AND status IN ('active','sold')", (uid,)).fetchone()
-        bal_rows = conn.execute("SELECT coins, total_earned FROM user_balances WHERE user_id = ?", (uid,)).fetchone()
-        up_rows = conn.execute("SELECT vip_until FROM user_profiles WHERE user_id = ?", (uid,)).fetchone()
+        bal_rows = conn.execute("SELECT coins, total_earned, vip_until FROM user_balances WHERE user_id = ?", (uid,)).fetchone()
+        up_rows = conn.execute("SELECT vip_until FROM user_balances WHERE user_id = ?", (uid,)).fetchone()
         subs = [_row_to_dict(r, sub_cols) for r in conn.execute(
             "SELECT id, query, cat, max_price_rub, city, active, is_free, paid_until, last_notified FROM match_subscriptions WHERE user_id = ? ORDER BY created DESC", (uid,)
         ).fetchall()]
@@ -5064,7 +5064,7 @@ async def profile_me(user: Dict[str, Any] = Depends(get_user)):
         refs_rows = conn.execute("SELECT COUNT(*) AS n FROM referrals WHERE referrer_id = ?", (uid,)).fetchone()
         rating_rows = conn.execute("SELECT AVG(rating)::float AS avg, COUNT(*) AS n FROM reviews WHERE seller_id = ?", (uid,)).fetchone()
         bal = conn.execute("SELECT coins, total_earned FROM user_balances WHERE user_id = ?", (uid,)).fetchone()
-        up = conn.execute("SELECT vip_until FROM user_profiles WHERE user_id = ?", (uid,)).fetchone()
+        up = conn.execute("SELECT vip_until FROM user_balances WHERE user_id = ?", (uid,)).fetchone()
         my_total_n_row = conn.execute("SELECT COUNT(*) AS n FROM listings WHERE user_id = ? AND status IN ('active','sold')", (uid,)).fetchone()
 
     bal_d = {"coins": 0, "total_earned": 0}
