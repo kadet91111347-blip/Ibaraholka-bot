@@ -427,6 +427,64 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_referral_bonuses_user ON referral_bonuses(user_id)
         """)
 
+        # ===== ИЗБРАННОЕ / FAVORITES =====
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS favorites (
+                id BIGSERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                listing_id TEXT NOT NULL,
+                created INTEGER NOT NULL,
+                UNIQUE(user_id, listing_id)
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_favorites_user ON favorites(user_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_favorites_created ON favorites(created DESC)")
+
+        # ===== ОТЗЫВЫ НА ПРОДАВЦОВ / REVIEWS =====
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS reviews (
+                id BIGSERIAL PRIMARY KEY,
+                deal_id TEXT,
+                seller_id BIGINT NOT NULL,
+                buyer_id BIGINT NOT NULL,
+                rating INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5),
+                text TEXT,
+                created INTEGER NOT NULL,
+                UNIQUE(deal_id, buyer_id)
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_reviews_seller ON reviews(seller_id, created DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_reviews_buyer ON reviews(buyer_id)")
+
+        # ===== ПРОСМОТРЫ ОБЪЯВЛЕНИЙ / LISTING VIEWS =====
+        # Для счётчика "X человек смотрят" + аналитики продавцу
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS listing_views (
+                id BIGSERIAL PRIMARY KEY,
+                listing_id TEXT NOT NULL,
+                viewer_id BIGINT,
+                created INTEGER NOT NULL
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_listing_views_listing ON listing_views(listing_id, created DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_listing_views_recent ON listing_views(created DESC)")
+
+        # ===== СОХРАНЁННЫЕ ФИЛЬТРЫ / SAVED FILTERS =====
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS saved_filters (
+                id BIGSERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                name TEXT NOT NULL,
+                cat TEXT,
+                city TEXT,
+                max_price INTEGER,
+                query TEXT,
+                created INTEGER NOT NULL,
+                UNIQUE(user_id, name)
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_saved_filters_user ON saved_filters(user_id)")
+
 
 # ============================================================
 # Telegram initData validation
@@ -4739,6 +4797,305 @@ async def admin_payouts_complete(payout_id: str, request: Request,
         except Exception as e:
             logging.warning(f"payout notify failed: {e}")
     return {"ok": True, "payout_id": payout_id, "status": "completed"}
+
+
+# ============================================================
+# FAVORITES — Избранное
+# ============================================================
+def _row_to_dict(r, cols):
+    """Convert DB row to dict (dict/tuple agnostic)."""
+    if r is None:
+        return None
+    try:
+        if hasattr(r, "keys"):
+            return {k: r[k] for k in cols}
+    except Exception:
+        pass
+    return dict(zip(cols, r))
+
+
+@app.get("/favorites")
+async def favorites_list(user: Dict[str, Any] = Depends(get_user)):
+    """Список избранных объявлений пользователя."""
+    uid = int(user["id"])
+    cols = ["id", "user_id", "user_name", "user_username", "title", "description", "price", "cat", "type", "contact", "photo", "tier", "city", "status", "created", "expires_at", "channel_message_id", "paid_at"]
+    with db_cursor() as conn:
+        rows = list(conn.execute(
+            "SELECT l.* FROM listings l JOIN favorites f ON f.listing_id = l.id WHERE f.user_id = ? ORDER BY f.created DESC LIMIT 200",
+            (uid,)
+        ))
+        items = [_row_to_dict(r, cols) for r in rows]
+    return {"ok": True, "favorites": items, "count": len(items)}
+
+
+@app.post("/favorites/{listing_id}")
+async def favorites_add(listing_id: str, user: Dict[str, Any] = Depends(get_user)):
+    """Добавить объявление в избранное."""
+    uid = int(user["id"])
+    now = int(time.time())
+    with db_cursor() as conn:
+        row = list(conn.execute("SELECT id FROM listings WHERE id = ?", (listing_id,)))
+        if not row:
+            raise HTTPException(404, "Listing not found")
+        conn.execute(
+            "INSERT INTO favorites (user_id, listing_id, created) VALUES (?, ?, ?) ON CONFLICT (user_id, listing_id) DO NOTHING",
+            (uid, listing_id, now)
+        )
+    return {"ok": True, "listing_id": listing_id}
+
+
+@app.delete("/favorites/{listing_id}")
+async def favorites_remove(listing_id: str, user: Dict[str, Any] = Depends(get_user)):
+    """Удалить объявление из избранного."""
+    uid = int(user["id"])
+    with db_cursor() as conn:
+        conn.execute("DELETE FROM favorites WHERE user_id = ? AND listing_id = ?", (uid, listing_id))
+    return {"ok": True, "listing_id": listing_id}
+
+
+# ============================================================
+# REVIEWS — Отзывы на продавца
+# ============================================================
+@app.post("/reviews")
+async def reviews_create(request: Request, user: Dict[str, Any] = Depends(get_user)):
+    """Оставить отзыв на продавца. Требуется завершённая сделка."""
+    body = await request.json()
+    deal_id = body.get("deal_id")
+    rating = body.get("rating")
+    text = (body.get("text") or "").strip()[:500]
+    if not deal_id or rating is None:
+        raise HTTPException(400, "deal_id and rating required")
+    if not (1 <= int(rating) <= 5):
+        raise HTTPException(400, "rating must be 1..5")
+    uid = int(user["id"])
+    now = int(time.time())
+    with db_cursor() as conn:
+        deal_rows = list(conn.execute(
+            "SELECT id, seller_id, buyer_id, status FROM deals WHERE id = ?",
+            (deal_id,)
+        ))
+        if not deal_rows:
+            raise HTTPException(404, "Deal not found")
+        deal = _row_to_dict(deal_rows[0], ["id", "seller_id", "buyer_id", "status"])
+        if int(deal["buyer_id"]) != uid:
+            raise HTTPException(403, "Not your deal")
+        if deal["status"] not in ("released", "completed"):
+            raise HTTPException(400, f"Deal not completed (status={deal['status']})")
+        seller_id = int(deal["seller_id"])
+        try:
+            conn.execute(
+                "INSERT INTO reviews (deal_id, seller_id, buyer_id, rating, text, created) VALUES (?, ?, ?, ?, ?, ?)",
+                (deal_id, seller_id, uid, int(rating), text, now)
+            )
+        except Exception as e:
+            if "UNIQUE" in str(e) or "duplicate" in str(e).lower():
+                raise HTTPException(400, "Review already exists")
+            raise
+    return {"ok": True, "deal_id": deal_id, "rating": int(rating)}
+
+
+@app.get("/users/{user_id}/reviews")
+async def user_reviews(user_id: int):
+    """Все отзывы на продавца + средний рейтинг."""
+    cols = ["id", "deal_id", "buyer_id", "rating", "text", "created"]
+    with db_cursor() as conn:
+        rows = list(conn.execute(
+            "SELECT id, deal_id, buyer_id, rating, text, created FROM reviews WHERE seller_id = ? ORDER BY created DESC LIMIT 100",
+            (user_id,)
+        ))
+        items = [_row_to_dict(r, cols) for r in rows]
+        avg = (sum(r["rating"] for r in items) / len(items)) if items else 0.0
+        return {"ok": True, "seller_id": user_id, "avg_rating": round(avg, 2), "count": len(items), "reviews": items}
+
+
+# ============================================================
+# LISTING VIEWS — Просмотры + "X человек смотрят"
+# ============================================================
+@app.post("/listings/{listing_id}/view")
+async def listing_view(listing_id: str, user: Dict[str, Any] = Depends(get_user)):
+    """Засчитать просмотр объявления (для FOMO-счётчика)."""
+    uid = int(user["id"])
+    now = int(time.time())
+    with db_cursor() as conn:
+        row = list(conn.execute("SELECT id FROM listings WHERE id = ?", (listing_id,)))
+        if not row:
+            raise HTTPException(404, "Listing not found")
+        # антинакрутка: один юзер = 1 просмотр в 5 минут
+        recent = list(conn.execute(
+            "SELECT id FROM listing_views WHERE listing_id = ? AND viewer_id = ? AND created > ?",
+            (listing_id, uid, now - 300)
+        ))
+        if not recent:
+            conn.execute(
+                "INSERT INTO listing_views (listing_id, viewer_id, created) VALUES (?, ?, ?)",
+                (listing_id, uid, now)
+            )
+        watchers_rows = list(conn.execute(
+            "SELECT COUNT(DISTINCT viewer_id) AS n FROM listing_views WHERE listing_id = ? AND created > ?",
+            (listing_id, now - 300)
+        ))
+        n = int(_row_to_dict(watchers_rows[0], ["n"])["n"]) if watchers_rows else 0
+        # FOMO-число
+        if n >= 5:
+            display = max(n, 5)
+        elif n >= 2:
+            display = n
+        else:
+            display = 0
+    return {"ok": True, "listing_id": listing_id, "watching_now": display, "real_watchers": n}
+
+
+@app.get("/listings/{listing_id}/stats")
+async def listing_stats(listing_id: str):
+    """Статистика объявления для продавца: просмотры за 24ч/7д/всего."""
+    now = int(time.time())
+    with db_cursor() as conn:
+        total = list(conn.execute("SELECT COUNT(*) AS n FROM listing_views WHERE listing_id = ?", (listing_id,)))
+        last_24h = list(conn.execute("SELECT COUNT(*) AS n FROM listing_views WHERE listing_id = ? AND created > ?", (listing_id, now - 86400)))
+        last_7d = list(conn.execute("SELECT COUNT(*) AS n FROM listing_views WHERE listing_id = ? AND created > ?", (listing_id, now - 604800)))
+    return {
+        "ok": True,
+        "listing_id": listing_id,
+        "views_total": int(_row_to_dict(total[0], ["n"])["n"]) if total else 0,
+        "views_24h": int(_row_to_dict(last_24h[0], ["n"])["n"]) if last_24h else 0,
+        "views_7d": int(_row_to_dict(last_7d[0], ["n"])["n"]) if last_7d else 0,
+    }
+
+
+# ============================================================
+# SEARCH — Полнотекстовый поиск объявлений
+# ============================================================
+@app.get("/search")
+async def search(q: str = "", cat: str = "", city: str = "", max_price: int = 0, limit: int = 50):
+    """Поиск объявлений. q ищет по title+description (case-insensitive LIKE)."""
+    limit = min(max(limit, 1), 100)
+    where = ["status = 'active'"]
+    params = []
+    if q.strip():
+        where.append("(LOWER(title) LIKE ? OR LOWER(description) LIKE ?)")
+        ql = f"%{q.strip().lower()}%"
+        params.extend([ql, ql])
+    if cat and cat != "all":
+        where.append("cat = ?")
+        params.append(cat)
+    if city.strip():
+        where.append("LOWER(city) LIKE ?")
+        params.append(f"%{city.strip().lower()}%")
+    if max_price > 0:
+        where.append("price <= ?")
+        params.append(max_price)
+    sql = f"SELECT * FROM listings WHERE {' AND '.join(where)} ORDER BY created DESC LIMIT {limit}"
+    cols = ["id", "user_id", "user_name", "user_username", "title", "description", "price", "cat", "type", "contact", "photo", "tier", "city", "status", "created", "expires_at", "channel_message_id", "paid_at"]
+    with db_cursor() as conn:
+        rows = list(conn.execute(sql, tuple(params)))
+        items = [_row_to_dict(r, cols) for r in rows]
+    return {"ok": True, "q": q, "count": len(items), "listings": items}
+
+
+# ============================================================
+# SAVED FILTERS — Сохранённые фильтры
+# ============================================================
+@app.post("/saved-filters")
+async def saved_filters_save(request: Request, user: Dict[str, Any] = Depends(get_user)):
+    """Сохранить набор фильтров под именем."""
+    body = await request.json()
+    name = (body.get("name") or "").strip()[:50]
+    if not name:
+        raise HTTPException(400, "name required")
+    uid = int(user["id"])
+    now = int(time.time())
+    cat = (body.get("cat") or "").strip() or None
+    city = (body.get("city") or "").strip() or None
+    max_price = int(body.get("max_price") or 0) or None
+    query = (body.get("query") or "").strip() or None
+    with db_cursor() as conn:
+        conn.execute(
+            "INSERT INTO saved_filters (user_id, name, cat, city, max_price, query, created) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (user_id, name) DO UPDATE SET cat=EXCLUDED.cat, city=EXCLUDED.city, max_price=EXCLUDED.max_price, query=EXCLUDED.query",
+            (uid, name, cat, city, max_price, query, now)
+        )
+    return {"ok": True, "name": name}
+
+
+@app.get("/saved-filters")
+async def saved_filters_list(user: Dict[str, Any] = Depends(get_user)):
+    """Список сохранённых фильтров пользователя."""
+    uid = int(user["id"])
+    with db_cursor() as conn:
+        rows = list(conn.execute(
+            "SELECT id, name, cat, city, max_price, query, created FROM saved_filters WHERE user_id = ? ORDER BY created DESC",
+            (uid,)
+        ))
+        items = [_row_to_dict(r, ["id", "name", "cat", "city", "max_price", "query", "created"]) for r in rows]
+    return {"ok": True, "filters": items}
+
+
+@app.delete("/saved-filters/{filter_id}")
+async def saved_filters_delete(filter_id: int, user: Dict[str, Any] = Depends(get_user)):
+    """Удалить сохранённый фильтр."""
+    uid = int(user["id"])
+    with db_cursor() as conn:
+        conn.execute("DELETE FROM saved_filters WHERE id = ? AND user_id = ?", (filter_id, uid))
+    return {"ok": True}
+
+
+# ============================================================
+# PROFILE — Мой профиль (всё обо мне)
+# ============================================================
+@app.get("/profile/me")
+async def profile_me(user: Dict[str, Any] = Depends(get_user)):
+    """Профиль текущего юзера: мои объявления, баланс, подписки, сделки, реф-стата."""
+    uid = int(user["id"])
+    now = int(time.time())
+    listing_cols = ["id", "user_id", "user_name", "user_username", "title", "description", "price", "cat", "type", "contact", "photo", "tier", "city", "status", "created", "expires_at", "channel_message_id", "paid_at"]
+    sub_cols = ["id", "query", "cat", "max_price_rub", "city", "active", "is_free", "paid_until", "last_notified"]
+    deal_cols = ["id", "listing_id", "amount_rub", "status", "created"]
+    with db_cursor() as conn:
+        my_active = [_row_to_dict(r, listing_cols) for r in conn.execute(
+            "SELECT * FROM listings WHERE user_id = ? AND status = 'active' ORDER BY created DESC LIMIT 50", (uid,)
+        )]
+        my_total_rows = list(conn.execute("SELECT COUNT(*) AS n FROM listings WHERE user_id = ? AND status IN ('active','sold')", (uid,)))
+        bal_rows = list(conn.execute("SELECT coins, total_earned FROM user_balances WHERE user_id = ?", (uid,)))
+        up_rows = list(conn.execute("SELECT vip_until FROM user_profiles WHERE user_id = ?", (uid,)))
+        subs = [_row_to_dict(r, sub_cols) for r in conn.execute(
+            "SELECT id, query, cat, max_price_rub, city, active, is_free, paid_until, last_notified FROM match_subscriptions WHERE user_id = ? ORDER BY created DESC", (uid,)
+        )]
+        deals_buyer = [_row_to_dict(r, deal_cols) for r in conn.execute(
+            "SELECT id, listing_id, amount_rub, status, created FROM deals WHERE buyer_id = ? ORDER BY created DESC LIMIT 20", (uid,)
+        )]
+        deals_seller = [_row_to_dict(r, deal_cols) for r in conn.execute(
+            "SELECT id, listing_id, amount_rub, status, created FROM deals WHERE seller_id = ? ORDER BY created DESC LIMIT 20", (uid,)
+        )]
+        fav_count_rows = list(conn.execute("SELECT COUNT(*) AS n FROM favorites WHERE user_id = ?", (uid,)))
+        refs_rows = list(conn.execute("SELECT COUNT(*) AS n FROM referrals WHERE referrer_id = ?", (uid,)))
+        rating_rows = list(conn.execute("SELECT AVG(rating)::float AS avg, COUNT(*) AS n FROM reviews WHERE seller_id = ?", (uid,)))
+
+    bal = _row_to_dict(bal_rows[0], ["coins", "total_earned"]) if bal_rows else {"coins": 0, "total_earned": 0}
+    up = _row_to_dict(up_rows[0], ["vip_until"]) if up_rows else None
+    vip_until = int(up["vip_until"]) if up and up.get("vip_until") else 0
+    vip_active = vip_until > now
+    my_total_n = int(_row_to_dict(my_total_rows[0], ["n"])["n"]) if my_total_rows else 0
+    fav_n = int(_row_to_dict(fav_count_rows[0], ["n"])["n"]) if fav_count_rows else 0
+    refs_n = int(_row_to_dict(refs_rows[0], ["n"])["n"]) if refs_rows else 0
+    rating = _row_to_dict(rating_rows[0], ["avg", "n"]) if rating_rows else {"avg": 0.0, "n": 0}
+    active_subs = sum(1 for s in subs if s["active"])
+    return {
+        "ok": True,
+        "user_id": uid,
+        "user_name": user.get("first_name", ""),
+        "user_username": user.get("username", ""),
+        "listings_active": len(my_active),
+        "listings_total": my_total_n,
+        "my_listings": my_active[:20],
+        "balance": {"coins": int(bal["coins"]) or 0, "total_earned": int(bal["total_earned"]) or 0},
+        "vip_until": vip_until,
+        "vip_active": vip_active,
+        "match_subs": {"active": active_subs, "total": len(subs), "items": subs},
+        "deals_buyer": deals_buyer,
+        "deals_seller": deals_seller,
+        "favorites_count": fav_n,
+        "referrals_count": refs_n,
+        "seller_rating": {"avg": round(float(rating["avg"]), 2) if rating.get("avg") else 0.0, "count": int(rating["n"]) if rating.get("n") else 0},
+    }
 
 
 # ============================================================
