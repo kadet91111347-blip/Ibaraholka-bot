@@ -1471,6 +1471,56 @@ def health():
     return {"ok": True, "ts": int(datetime.now().timestamp())}
 
 
+@app.post("/debug/force-match-notify/{listing_id}")
+async def debug_force_match_notify(listing_id: str):
+    """Force-run _notify_match_subscribers on a given listing."""
+    import traceback
+    try:
+        with db_cursor() as conn:
+            row = conn.execute("SELECT * FROM listings WHERE id=?", (listing_id,)).fetchone()
+        if not row:
+            return {"ok": False, "error": "no_listing"}
+        def _g(r, k, idx):
+            try:
+                if hasattr(r, "keys"):
+                    return r[k]
+                return r[idx]
+            except Exception:
+                return None
+        item = ListingIn(
+            title=_g(row, "title", 3) or "",
+            description=_g(row, "description", 4) or "",
+            price=int(_g(row, "price", 5) or 0),
+            currency="RUB",
+            cat=_g(row, "cat", 6) or "iphone",
+            type=_g(row, "type", 7) or "sell",
+            city=_g(row, "city", 13),
+            contact="@test",
+            tier=_g(row, "tier", 12) or "free",
+        )
+        user_dict = {"id": int(_g(row, "user_id", 0)), "first_name": "S", "username": "s"}
+        # Make sure _notify_match_subscribers' logger.info reaches our response
+        logger.setLevel(logging.INFO)
+        # capture log records by calling it directly
+        old_level = logging.getLogger().level
+        logging.getLogger().setLevel(logging.INFO)
+        # Add a memory handler
+        captured = []
+        class MemHandler(logging.Handler):
+            def emit(self, record):
+                captured.append(self.format(record))
+        h = MemHandler()
+        h.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+        logging.getLogger().addHandler(h)
+        try:
+            await _notify_match_subscribers(listing_id, item, user_dict, 99999)
+        finally:
+            logging.getLogger().removeHandler(h)
+        return {"ok": True, "logs": captured}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "tb": traceback.format_exc()}
+
+
 @app.get("/debug/logs")
 def debug_logs():
     """Debug endpoint: show last_post.log if available."""
