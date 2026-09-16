@@ -3755,13 +3755,39 @@ def _parse_match_query(raw_query: str) -> Dict[str, Any]:
             cat = c
             break
 
-    # City: common big cities (Russian)
+    # City: common big cities (Russian) — use stem-prefix matching for declension
+    # "Москве", "Москвы", "в Москву" → все мэтчатся со stem "моск"
     city = None
-    cities = ["москва", "спб", "санкт-петербург", "петербург", "екатеринбург", "казань", "новосибирск", "краснодар", "нижний новгород", "самара", "ростов", "уфа", "челябинск"]
-    for c in cities:
-        if c in q:
-            city = "Москва" if c == "москва" else ("Санкт-Петербург" if c in ("спб", "санкт-петербург", "петербург") else c.capitalize())
-            break
+    city_stems = [
+        ("Москва", "моск"),
+        ("Санкт-Петербург", "петер"),
+        ("Санкт-Петербург", "питер"),
+        ("Екатеринбург", "екат"),
+        ("Казань", "казан"),
+        ("Новосибирск", "новос"),
+        ("Краснодар", "красн"),
+        ("Нижний Новгород", "нижн"),
+        ("Самара", "самар"),
+        ("Ростов", "росто"),
+        ("Уфа", "уфа"),
+        ("Челябинск", "челяб"),
+    ]
+    # Extract words from query and check stem match
+    q_words = _re.findall(r"[а-яёa-z]+", q.lower())
+    q_stems = set()
+    for w in q_words:
+        if len(w) >= 4:
+            q_stems.add(w[:4])
+        else:
+            q_stems.add(w)
+    # Also check for literal "спб" (3-char abbrev)
+    if "спб" in q:
+        city = "Санкт-Петербург"
+    else:
+        for display_name, stem in city_stems:
+            if stem in q_stems:
+                city = display_name
+                break
 
     # Color
     color = None
