@@ -1167,7 +1167,7 @@ def debug_state():
     state = {
         "BOT_TOKEN_set": bool(os.getenv("BOT_TOKEN")),
         "BOT_TOKEN_prefix": os.getenv("BOT_TOKEN", "")[:15] + "...",
-        "CHANNEL_ID": os.getenv("CHANNEL_ID"),
+        "CHANNEL_ID": os.getenv("CHANNEL_ID") or CHANNEL_ID,  # use module default if env var missing
         "WEBAPP_URL": WEBAPP_URL,
         "DEMO_MODE_env": os.getenv("DEMO_MODE"),
         "DEMO_MODE_module": DEMO_MODE,

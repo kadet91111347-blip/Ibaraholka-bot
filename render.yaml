@@ -6,6 +6,7 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     autoDeploy: true
+    healthCheckPath: /health
     envVars:
       - key: PORT
         value: 10000
@@ -17,6 +18,8 @@ services:
         sync: false
       - key: CHANNEL
         sync: false
+      - key: CHANNEL_ID
+        value: "@ibaraholkatyt"
       - key: WEBAPP_URL
         sync: false
       - key: DATABASE_URL
