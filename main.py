@@ -4820,10 +4820,7 @@ async def favorites_list(user: Dict[str, Any] = Depends(get_user)):
     uid = int(user["id"])
     cols = ["id", "user_id", "user_name", "user_username", "title", "description", "price", "cat", "type", "contact", "photo", "tier", "city", "status", "created", "expires_at", "channel_message_id", "paid_at"]
     with db_cursor() as conn:
-        rows = list(conn.execute(
-            "SELECT l.* FROM listings l JOIN favorites f ON f.listing_id = l.id WHERE f.user_id = ? ORDER BY f.created DESC LIMIT 200",
-            (uid,)
-        ))
+        rows = conn.execute("SELECT l.* FROM listings l JOIN favorites f ON f.listing_id = l.id WHERE f.user_id = ? ORDER BY f.created DESC LIMIT 200", (uid,)).fetchall()
         items = [_row_to_dict(r, cols) for r in rows]
     return {"ok": True, "favorites": items, "count": len(items)}
 
@@ -4834,7 +4831,7 @@ async def favorites_add(listing_id: str, user: Dict[str, Any] = Depends(get_user
     uid = int(user["id"])
     now = int(time.time())
     with db_cursor() as conn:
-        row = list(conn.execute("SELECT id FROM listings WHERE id = ?", (listing_id,)))
+        row = conn.execute("SELECT id FROM listings WHERE id = ?", (listing_id,)).fetchone()
         if not row:
             raise HTTPException(404, "Listing not found")
         conn.execute(
@@ -4870,13 +4867,13 @@ async def reviews_create(request: Request, user: Dict[str, Any] = Depends(get_us
     uid = int(user["id"])
     now = int(time.time())
     with db_cursor() as conn:
-        deal_rows = list(conn.execute(
+        deal_row = conn.execute(
             "SELECT id, seller_id, buyer_id, status FROM deals WHERE id = ?",
             (deal_id,)
-        ))
-        if not deal_rows:
+        ).fetchone()
+        if not deal_row:
             raise HTTPException(404, "Deal not found")
-        deal = _row_to_dict(deal_rows[0], ["id", "seller_id", "buyer_id", "status"])
+        deal = _row_to_dict(deal_row, ["id", "seller_id", "buyer_id", "status"])
         if int(deal["buyer_id"]) != uid:
             raise HTTPException(403, "Not your deal")
         if deal["status"] not in ("released", "completed"):
@@ -4899,10 +4896,7 @@ async def user_reviews(user_id: int):
     """Все отзывы на продавца + средний рейтинг."""
     cols = ["id", "deal_id", "buyer_id", "rating", "text", "created"]
     with db_cursor() as conn:
-        rows = list(conn.execute(
-            "SELECT id, deal_id, buyer_id, rating, text, created FROM reviews WHERE seller_id = ? ORDER BY created DESC LIMIT 100",
-            (user_id,)
-        ))
+        rows = conn.execute("SELECT id, deal_id, buyer_id, rating, text, created FROM reviews WHERE seller_id = ? ORDER BY created DESC LIMIT 100", (user_id,)).fetchall()
         items = [_row_to_dict(r, cols) for r in rows]
         avg = (sum(r["rating"] for r in items) / len(items)) if items else 0.0
         return {"ok": True, "seller_id": user_id, "avg_rating": round(avg, 2), "count": len(items), "reviews": items}
@@ -4917,24 +4911,24 @@ async def listing_view(listing_id: str, user: Dict[str, Any] = Depends(get_user)
     uid = int(user["id"])
     now = int(time.time())
     with db_cursor() as conn:
-        row = list(conn.execute("SELECT id FROM listings WHERE id = ?", (listing_id,)))
+        row = conn.execute("SELECT id FROM listings WHERE id = ?", (listing_id,)).fetchone()
         if not row:
             raise HTTPException(404, "Listing not found")
         # антинакрутка: один юзер = 1 просмотр в 5 минут
-        recent = list(conn.execute(
+        recent = conn.execute(
             "SELECT id FROM listing_views WHERE listing_id = ? AND viewer_id = ? AND created > ?",
             (listing_id, uid, now - 300)
-        ))
+        ).fetchone()
         if not recent:
             conn.execute(
                 "INSERT INTO listing_views (listing_id, viewer_id, created) VALUES (?, ?, ?)",
                 (listing_id, uid, now)
             )
-        watchers_rows = list(conn.execute(
+        watchers_n = conn.execute(
             "SELECT COUNT(DISTINCT viewer_id) AS n FROM listing_views WHERE listing_id = ? AND created > ?",
             (listing_id, now - 300)
-        ))
-        n = int(_row_to_dict(watchers_rows[0], ["n"])["n"]) if watchers_rows else 0
+        ).fetchone()
+        n = int(watchers_n["n"]) if watchers_n else 0
         # FOMO-число
         if n >= 5:
             display = max(n, 5)
@@ -4950,15 +4944,15 @@ async def listing_stats(listing_id: str):
     """Статистика объявления для продавца: просмотры за 24ч/7д/всего."""
     now = int(time.time())
     with db_cursor() as conn:
-        total = list(conn.execute("SELECT COUNT(*) AS n FROM listing_views WHERE listing_id = ?", (listing_id,)))
-        last_24h = list(conn.execute("SELECT COUNT(*) AS n FROM listing_views WHERE listing_id = ? AND created > ?", (listing_id, now - 86400)))
-        last_7d = list(conn.execute("SELECT COUNT(*) AS n FROM listing_views WHERE listing_id = ? AND created > ?", (listing_id, now - 604800)))
+        total = conn.execute("SELECT COUNT(*) AS n FROM listing_views WHERE listing_id = ?", (listing_id,)).fetchone()
+        last_24h = conn.execute("SELECT COUNT(*) AS n FROM listing_views WHERE listing_id = ? AND created > ?", (listing_id, now - 86400)).fetchone()
+        last_7d = conn.execute("SELECT COUNT(*) AS n FROM listing_views WHERE listing_id = ? AND created > ?", (listing_id, now - 604800)).fetchone()
     return {
         "ok": True,
         "listing_id": listing_id,
-        "views_total": int(_row_to_dict(total[0], ["n"])["n"]) if total else 0,
-        "views_24h": int(_row_to_dict(last_24h[0], ["n"])["n"]) if last_24h else 0,
-        "views_7d": int(_row_to_dict(last_7d[0], ["n"])["n"]) if last_7d else 0,
+        "views_total": int(total["n"]) if total else 0,
+        "views_24h": int(last_24h["n"]) if last_24h else 0,
+        "views_7d": int(last_7d["n"]) if last_7d else 0,
     }
 
 
@@ -4987,7 +4981,7 @@ async def search(q: str = "", cat: str = "", city: str = "", max_price: int = 0,
     sql = f"SELECT * FROM listings WHERE {' AND '.join(where)} ORDER BY created DESC LIMIT {limit}"
     cols = ["id", "user_id", "user_name", "user_username", "title", "description", "price", "cat", "type", "contact", "photo", "tier", "city", "status", "created", "expires_at", "channel_message_id", "paid_at"]
     with db_cursor() as conn:
-        rows = list(conn.execute(sql, tuple(params)))
+        rows = conn.execute(sql, tuple(params)).fetchall()
         items = [_row_to_dict(r, cols) for r in rows]
     return {"ok": True, "q": q, "count": len(items), "listings": items}
 
@@ -5021,10 +5015,7 @@ async def saved_filters_list(user: Dict[str, Any] = Depends(get_user)):
     """Список сохранённых фильтров пользователя."""
     uid = int(user["id"])
     with db_cursor() as conn:
-        rows = list(conn.execute(
-            "SELECT id, name, cat, city, max_price, query, created FROM saved_filters WHERE user_id = ? ORDER BY created DESC",
-            (uid,)
-        ))
+        rows = conn.execute("SELECT id, name, cat, city, max_price, query, created FROM saved_filters WHERE user_id = ? ORDER BY created DESC", (uid,)).fetchall()
         items = [_row_to_dict(r, ["id", "name", "cat", "city", "max_price", "query", "created"]) for r in rows]
     return {"ok": True, "filters": items}
 
@@ -5052,31 +5043,37 @@ async def profile_me(user: Dict[str, Any] = Depends(get_user)):
     with db_cursor() as conn:
         my_active = [_row_to_dict(r, listing_cols) for r in conn.execute(
             "SELECT * FROM listings WHERE user_id = ? AND status = 'active' ORDER BY created DESC LIMIT 50", (uid,)
-        )]
-        my_total_rows = list(conn.execute("SELECT COUNT(*) AS n FROM listings WHERE user_id = ? AND status IN ('active','sold')", (uid,)))
-        bal_rows = list(conn.execute("SELECT coins, total_earned FROM user_balances WHERE user_id = ?", (uid,)))
-        up_rows = list(conn.execute("SELECT vip_until FROM user_profiles WHERE user_id = ?", (uid,)))
+        ).fetchall()]
+        my_total_rows = conn.execute("SELECT COUNT(*) AS n FROM listings WHERE user_id = ? AND status IN ('active','sold')", (uid,)).fetchone()
+        bal_rows = conn.execute("SELECT coins, total_earned FROM user_balances WHERE user_id = ?", (uid,)).fetchone()
+        up_rows = conn.execute("SELECT vip_until FROM user_profiles WHERE user_id = ?", (uid,)).fetchone()
         subs = [_row_to_dict(r, sub_cols) for r in conn.execute(
             "SELECT id, query, cat, max_price_rub, city, active, is_free, paid_until, last_notified FROM match_subscriptions WHERE user_id = ? ORDER BY created DESC", (uid,)
-        )]
+        ).fetchall()]
         deals_buyer = [_row_to_dict(r, deal_cols) for r in conn.execute(
             "SELECT id, listing_id, amount_rub, status, created FROM deals WHERE buyer_id = ? ORDER BY created DESC LIMIT 20", (uid,)
-        )]
+        ).fetchall()]
         deals_seller = [_row_to_dict(r, deal_cols) for r in conn.execute(
             "SELECT id, listing_id, amount_rub, status, created FROM deals WHERE seller_id = ? ORDER BY created DESC LIMIT 20", (uid,)
-        )]
-        fav_count_rows = list(conn.execute("SELECT COUNT(*) AS n FROM favorites WHERE user_id = ?", (uid,)))
-        refs_rows = list(conn.execute("SELECT COUNT(*) AS n FROM referrals WHERE referrer_id = ?", (uid,)))
-        rating_rows = list(conn.execute("SELECT AVG(rating)::float AS avg, COUNT(*) AS n FROM reviews WHERE seller_id = ?", (uid,)))
+        ).fetchall()]
+        fav_count_rows = conn.execute("SELECT COUNT(*) AS n FROM favorites WHERE user_id = ?", (uid,)).fetchone()
+        refs_rows = conn.execute("SELECT COUNT(*) AS n FROM referrals WHERE referrer_id = ?", (uid,)).fetchone()
+        rating_rows = conn.execute("SELECT AVG(rating)::float AS avg, COUNT(*) AS n FROM reviews WHERE seller_id = ?", (uid,)).fetchone()
+        bal = conn.execute("SELECT coins, total_earned FROM user_balances WHERE user_id = ?", (uid,)).fetchone()
+        up = conn.execute("SELECT vip_until FROM user_profiles WHERE user_id = ?", (uid,)).fetchone()
+        my_total_n_row = conn.execute("SELECT COUNT(*) AS n FROM listings WHERE user_id = ? AND status IN ('active','sold')", (uid,)).fetchone()
 
-    bal = _row_to_dict(bal_rows[0], ["coins", "total_earned"]) if bal_rows else {"coins": 0, "total_earned": 0}
-    up = _row_to_dict(up_rows[0], ["vip_until"]) if up_rows else None
+    bal_d = {"coins": 0, "total_earned": 0}
+    if bal:
+        bal_d = {"coins": int(bal["coins"]) if bal.get("coins") else 0, "total_earned": int(bal["total_earned"]) if bal.get("total_earned") else 0}
     vip_until = int(up["vip_until"]) if up and up.get("vip_until") else 0
     vip_active = vip_until > now
-    my_total_n = int(_row_to_dict(my_total_rows[0], ["n"])["n"]) if my_total_rows else 0
-    fav_n = int(_row_to_dict(fav_count_rows[0], ["n"])["n"]) if fav_count_rows else 0
-    refs_n = int(_row_to_dict(refs_rows[0], ["n"])["n"]) if refs_rows else 0
-    rating = _row_to_dict(rating_rows[0], ["avg", "n"]) if rating_rows else {"avg": 0.0, "n": 0}
+    my_total_n = int(my_total_n_row["n"]) if my_total_n_row else 0
+    fav_n = int(fav_count_rows["n"]) if fav_count_rows else 0
+    refs_n = int(refs_rows["n"]) if refs_rows else 0
+    rating = {"avg": 0.0, "n": 0}
+    if rating_rows:
+        rating = {"avg": float(rating_rows["avg"]) if rating_rows.get("avg") else 0.0, "n": int(rating_rows["n"]) if rating_rows.get("n") else 0}
     active_subs = sum(1 for s in subs if s["active"])
     return {
         "ok": True,
