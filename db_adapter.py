@@ -21,7 +21,7 @@ _PG_POOL = None
 _PG_POOL_LOCK = threading.Lock()
 
 
-def _init_pool(minconn=1, maxconn=10):
+def _init_pool(minconn=2, maxconn=20):
     """Create pool once. Returns existing pool if already initialized."""
     global _PG_POOL
     if _PG_POOL is not None:
@@ -161,7 +161,7 @@ class _PostgresConnection:
     """
     def __init__(self):
         try:
-            self._pooled = _init_pool(minconn=1, maxconn=10).getconn()
+            self._pooled = _init_pool(minconn=2, maxconn=20).getconn()
             self._pooled.autocommit = True
             self._cursor = _PostgresCursor(self._pooled.cursor(cursor_factory=RealDictCursor))
             self._closed = False

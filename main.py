@@ -1139,6 +1139,15 @@ def root():
 
 @app.get("/health")
 def health():
+    """Health check that also keeps the DB connection pool warm.
+    Without this, the first request after a quiet period would pay the
+    Neon TCP+TLS+auth handshake (~300ms). With it, the pool stays primed.
+    """
+    try:
+        with db_cursor() as conn:
+            conn.execute("SELECT 1").fetchone()
+    except Exception:
+        pass  # health check never fails on DB
     return {"ok": True, "ts": int(datetime.now().timestamp())}
 
 
