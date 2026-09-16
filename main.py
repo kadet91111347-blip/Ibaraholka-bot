@@ -4000,6 +4000,18 @@ async def match_insert_test(request: Request):
         return {"ok": False, "error": str(e), "tb": traceback.format_exc()}
 
 
+
+@app.get("/debug/parse-match")
+async def debug_parse_match(q: str):
+    """Just run the parser — returns the parsed dict."""
+    try:
+        parsed = _parse_match_query(q)
+        return {"ok": True, "parsed": parsed}
+    except Exception as e:
+        import traceback
+        return {"ok": False, "error": str(e), "tb": traceback.format_exc()}
+
+
 @app.post("/match/subscribe")
 async def match_subscribe(request: Request, user: Dict = Depends(get_user)):
     """Create a new match subscription.
