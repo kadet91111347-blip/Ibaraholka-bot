@@ -1901,6 +1901,90 @@ async def admin_stats(admin_token: str = ""):
         }
 
 
+@app.get("/admin/autopost")
+async def admin_autopost(request: Request, listing_id: str = "", tier: str = ""):
+    """Autopost: pick the next active listing and publish it to channel.
+
+    Called by cron 'Автопост 10:00' and any scheduled promo.
+
+    Strategy:
+      1) If listing_id provided in query — use it.
+      2) Else if tier provided — pick random active listing of that tier.
+      3) Else — pick oldest active listing that has no channel_message_id yet
+         (rotation: never-published first, then by created asc).
+
+    Auth: query param ?token=<ADMIN_TOKEN>.
+    Returns: {ok, posted, listing_id, message_id, reason}.
+    """
+    auth = (
+        request.headers.get("x-admin-token", "")
+        or request.query_params.get("token", "")
+    )
+    if auth != ADMIN_TOKEN:
+        raise HTTPException(403, "Admin token required")
+
+    with db_cursor() as conn:
+        if listing_id:
+            row = conn.execute(
+                "SELECT * FROM listings WHERE id=?", (listing_id,)
+            ).fetchone()
+        elif tier:
+            row = conn.execute(
+                "SELECT * FROM listings WHERE status='active' AND tier=? "
+                "ORDER BY created ASC LIMIT 1",
+                (tier,),
+            ).fetchone()
+        else:
+            # First: active listings never posted to channel (free tier preferred).
+            row = conn.execute(
+                "SELECT * FROM listings WHERE status='active' "
+                "AND channel_message_id IS NULL "
+                "AND tier IN ('free','premium','vip') "
+                "ORDER BY created ASC LIMIT 1"
+            ).fetchone()
+            if not row:
+                # Fallback: oldest active listing (rotation).
+                row = conn.execute(
+                    "SELECT * FROM listings WHERE status='active' "
+                    "ORDER BY created ASC LIMIT 1"
+                ).fetchone()
+
+    if not row:
+        return {"ok": False, "posted": False, "reason": "no active listings"}
+
+    item_id = row["id"]
+    class _L: pass
+    item = _L()
+    item.title = row["title"]
+    item.description = row["description"]
+    item.price = row["price"]
+    item.cat = row["cat"]
+    item.type = row["type"]
+    item.contact = row["contact"]
+    item.photo = row["photo"] or ""
+    item.tier = row["tier"]
+    item.city = row["city"]
+    user = {
+        "first_name": row["user_name"] or "Продавец",
+        "username": row["user_username"],
+        "id": row["user_id"],
+    }
+
+    try:
+        await post_to_channel(item_id, item, user)
+        return {
+            "ok": True,
+            "posted": True,
+            "listing_id": item_id,
+            "tier": row["tier"],
+            "title": row["title"],
+            "price": row["price"],
+        }
+    except Exception as e:
+        logger.error(f"admin_autopost failed: {e}")
+        return {"ok": False, "posted": False, "listing_id": item_id, "error": str(e)}
+
+
 @app.post("/admin/post-channel")
 async def admin_post_channel(request: Request):
     """Admin: post a listing to channel manually."""
