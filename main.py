@@ -3978,6 +3978,28 @@ async def _push_match(user_id: int, sub_id: str, listing_id: str, listing: Dict[
         logger.warning(f"push_match failed for user {user_id}: {e}")
 
 
+
+@app.post("/debug/match-insert-test")
+async def match_insert_test(request: Request):
+    """Test INSERT into match_subscriptions directly."""
+    try:
+        import traceback
+        body = await request.json()
+        with db_cursor() as conn:
+            conn.execute(
+                "INSERT INTO match_subscriptions "
+                "(id, user_id, user_name, user_username, query, keywords, cat, max_price_rub, city, color, extra, active, is_free, paid_until, created, last_notified) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,1,%s,%s,%s,NULL)",
+                (body.get("id","MS-DBG"), int(body.get("user_id",1)), body.get("user_name","T"), body.get("user_username","t"),
+                 body.get("query","test"), body.get("keywords","k"), body.get("cat","iphone"), body.get("max_price",30000),
+                 body.get("city","Москва"), body.get("color","чёрный"), body.get("extra"), int(body.get("is_free",1)),
+                 int(body.get("paid_until","0")) or None, int(body.get("created",0))),
+            )
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "tb": traceback.format_exc()}
+
+
 @app.post("/match/subscribe")
 async def match_subscribe(request: Request, user: Dict = Depends(get_user)):
     """Create a new match subscription.
