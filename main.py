@@ -1884,26 +1884,30 @@ async def tinkoff_notify(request: Request):
 
     # ESCROW DEAL FLOW
     if deal_id:
-        with db_cursor() as conn:
-            row = conn.execute("SELECT * FROM deals WHERE id=?", (deal_id,)).fetchone()
-            if not row:
-                return {"ok": False, "error": "deal_not_found"}
-            d = _deal_row_to_dict(row)
-            if d["buyer_id"] != user_id:
-                return {"ok": False, "error": "not_buyer"}
-            if d["status"] not in ("awaiting_payment", "escrowed"):
-                return {"ok": False, "error": f"bad_status:{d['status']}"}
-            if d["status"] == "escrowed":
-                return {"ok": True, "status": "escrowed", "deal_id": deal_id,
-                        "instruction": "Деньги в гаранте. Продавец скоро отправит."}
-            conn.execute(
-                "UPDATE deals SET status='escrowed', paid_at=? WHERE id=?",
-                (int(time.time()), deal_id),
-            )
-            conn.commit()
-        logging.info(f"DEAL_ESCROWED deal={deal_id} user={user_id}")
-        return {"ok": True, "status": "escrowed", "deal_id": deal_id,
-                "instruction": "Деньги в гаранте. Продавец скоро отправит."}
+        try:
+            with db_cursor() as conn:
+                row = conn.execute("SELECT * FROM deals WHERE id=?", (deal_id,)).fetchone()
+                if not row:
+                    return {"ok": False, "error": "deal_not_found"}
+                d = _deal_row_to_dict(row)
+                if d["buyer_id"] != user_id:
+                    return {"ok": False, "error": "not_buyer"}
+                if d["status"] not in ("awaiting_payment", "escrowed"):
+                    return {"ok": False, "error": f"bad_status:{d['status']}"}
+                if d["status"] == "escrowed":
+                    return {"ok": True, "status": "escrowed", "deal_id": deal_id,
+                            "instruction": "Деньги в гаранте. Продавец скоро отправит."}
+                conn.execute(
+                    "UPDATE deals SET status='escrowed', paid_at=? WHERE id=?",
+                    (int(time.time()), deal_id),
+                )
+                conn.commit()
+            logging.info(f"DEAL_ESCROWED deal={deal_id} user={user_id}")
+            return {"ok": True, "status": "escrowed", "deal_id": deal_id,
+                    "instruction": "Деньги в гаранте. Продавец скоро отправит."}
+        except Exception as e:
+            logging.exception(f"tinkoff_notify deal error: {e}")
+            return {"ok": False, "error": f"deal_path: {e}"}
 
     if not listing_id:
         return {"ok": False, "error": "no listing_id"}
