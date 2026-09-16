@@ -25,6 +25,8 @@ import hmac
 import hashlib
 import urllib.parse
 import secrets as _secrets
+import uuid as _uuid
+_uuid4 = _uuid.uuid4
 import httpx
 from datetime import datetime
 from typing import Optional, Dict, Any, List
@@ -982,7 +984,7 @@ async def cmd_find(message: types.Message):
         free_cnt = 0
 
     is_free = (cnt == 0)
-    sub_id = "MS-" + uuid.uuid4().hex[:6].upper()
+    sub_id = "MS-" + _uuid4().hex[:6].upper()
 
     if is_free:
         try:
@@ -3979,70 +3981,6 @@ async def _push_match(user_id: int, sub_id: str, listing_id: str, listing: Dict[
 
 
 
-@app.post("/debug/match-insert-test")
-async def match_insert_test(request: Request):
-    """Test INSERT into match_subscriptions directly."""
-    try:
-        import traceback
-        body = await request.json()
-        with db_cursor() as conn:
-            conn.execute(
-                "INSERT INTO match_subscriptions "
-                "(id, user_id, user_name, user_username, query, keywords, cat, max_price_rub, city, color, extra, active, is_free, paid_until, created, last_notified) "
-                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,1,%s,%s,%s,NULL)",
-                (body.get("id","MS-DBG"), int(body.get("user_id",1)), body.get("user_name","T"), body.get("user_username","t"),
-                 body.get("query","test"), body.get("keywords","k"), body.get("cat","iphone"), body.get("max_price",30000),
-                 body.get("city","Москва"), body.get("color","чёрный"), body.get("extra"), int(body.get("is_free",1)),
-                 int(body.get("paid_until","0")) or None, int(body.get("created",0))),
-            )
-        return {"ok": True}
-    except Exception as e:
-        return {"ok": False, "error": str(e), "tb": traceback.format_exc()}
-
-
-
-@app.get("/debug/parse-match")
-async def debug_parse_match(q: str):
-    """Just run the parser — returns the parsed dict."""
-    try:
-        parsed = _parse_match_query(q)
-        return {"ok": True, "parsed": parsed}
-    except Exception as e:
-        import traceback
-        return {"ok": False, "error": str(e), "tb": traceback.format_exc()}
-
-
-
-@app.post("/debug/match-subscribe-test")
-async def debug_match_subscribe_test(request: Request):
-    """Call match_subscribe logic directly with a fake user."""
-    import traceback
-    try:
-        body = await request.json()
-        # Fake user dict (just like validate_init_data would return)
-        user = {"id": 748834052, "first_name": "Sasha", "username": "Izdelie0810"}
-        # Create a fake Request-like object? We can directly call the logic by extracting it
-        # Instead, let's just emulate the SQL
-        from db_adapter import db_cursor
-        user_id = int(user["id"])
-        parsed = _parse_match_query(body.get("query", ""))
-        print(f"DEBUG parsed={parsed}")
-        now = int(time.time())
-        sub_id = "MS-DBGSUB-" + uuid.uuid4().hex[:6].upper()
-        with db_cursor() as conn:
-            conn.execute(
-                "INSERT INTO match_subscriptions "
-                "(id, user_id, user_name, user_username, query, keywords, cat, max_price_rub, city, color, extra, active, is_free, paid_until, created, last_notified) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,NULL)",
-                (sub_id, user_id, user["first_name"], user["username"],
-                 body.get("query", ""), ",".join(parsed["keywords"]), parsed["cat"], parsed["max_price"],
-                 parsed["city"], parsed["color"], parsed["extra"], 1, None, now),
-            )
-        return {"ok": True, "sub_id": sub_id, "parsed": parsed}
-    except Exception as e:
-        return {"ok": False, "error": str(e), "tb": traceback.format_exc()}
-
-
 @app.post("/match/subscribe")
 async def match_subscribe(request: Request, user: Dict = Depends(get_user)):
     """Create a new match subscription.
@@ -4066,7 +4004,7 @@ async def match_subscribe(request: Request, user: Dict = Depends(get_user)):
 
     # Check existing subs to decide free vs paid
     now = int(time.time())
-    sub_id = "MS-" + uuid.uuid4().hex[:6].upper()
+    sub_id = "MS-" + _uuid4().hex[:6].upper()
     is_free = False
     try:
         with db_cursor() as conn:
