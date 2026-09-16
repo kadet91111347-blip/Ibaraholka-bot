@@ -1471,57 +1471,6 @@ def health():
     return {"ok": True, "ts": int(datetime.now().timestamp())}
 
 
-@app.post("/debug/force-match-notify/{listing_id}")
-async def debug_force_match_notify(listing_id: str):
-    """Force-run _notify_match_subscribers on a given listing."""
-    import traceback
-    try:
-        with db_cursor() as conn:
-            row = conn.execute("SELECT * FROM listings WHERE id=?", (listing_id,)).fetchone()
-        if not row:
-            return {"ok": False, "error": "no_listing"}
-        def _g(r, k, idx):
-            try:
-                if hasattr(r, "keys"):
-                    return r[k]
-                return r[idx]
-            except Exception:
-                return None
-        item = ListingIn(
-            title=_g(row, "title", 3) or "",
-            description=_g(row, "description", 4) or "",
-            price=int(_g(row, "price", 5) or 0),
-            currency="RUB",
-            cat=_g(row, "cat", 6) or "iphone",
-            type=_g(row, "type", 7) or "sell",
-            city=_g(row, "city", 13),
-            contact="@test",
-            tier=_g(row, "tier", 12) or "free",
-        )
-        user_dict = {"id": int(_g(row, "user_id", 0)), "first_name": "S", "username": "s"}
-        # Make sure _notify_match_subscribers' logger.info reaches our response
-        logger.setLevel(logging.INFO)
-        # capture log records by calling it directly
-        old_level = logging.getLogger().level
-        logging.getLogger().setLevel(logging.INFO)
-        # Add a memory handler
-        captured = []
-        class MemHandler(logging.Handler):
-            def emit(self, record):
-                captured.append(self.format(record))
-        h = MemHandler()
-        h.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
-        logging.getLogger().addHandler(h)
-        try:
-            logger.info(f"DEBUG force: listing_id={listing_id} item.cat={item.cat!r} item.title={item.title!r} item.description={item.description!r} item.city={item.city!r}")
-            await _notify_match_subscribers(listing_id, item, user_dict, 99999)
-        finally:
-            logging.getLogger().removeHandler(h)
-        return {"ok": True, "logs": captured}
-    except Exception as e:
-        return {"ok": False, "error": str(e), "tb": traceback.format_exc()}
-
-
 @app.get("/debug/logs")
 def debug_logs():
     """Debug endpoint: show last_post.log if available."""
@@ -3872,34 +3821,30 @@ def _match_listing_to_subscription(filters: Dict[str, Any], listing: Dict[str, A
     """Pure-Python matcher (no LLM). Returns True if listing matches filters."""
     # Cat
     if filters.get("cat") and listing.get("cat") != filters["cat"]:
-        logger.info(f"matcher: cat mismatch filters={filters.get('cat')!r} listing={listing.get('cat')!r}")
         return False
     # Price
     if filters.get("max_price") is not None:
         price = int(listing.get("price") or 0)
         if price > filters["max_price"]:
-            logger.info(f"matcher: price {price} > max {filters['max_price']}")
             return False
     # City (substring match — listing.city may have district)
     if filters.get("city"):
         fc = filters["city"].lower()
         lc = (listing.get("city") or "").lower()
         if fc not in lc and lc not in fc:
-            logger.info(f"matcher: city mismatch filters.city={fc!r} listing.city={lc!r}")
             return False
     # Color — check title + description
     if filters.get("color"):
         text = ((listing.get("title") or "") + " " + (listing.get("description") or "")).lower()
         if filters["color"].lower() not in text:
-            logger.info(f"matcher: color {filters['color']!r} not in text")
             return False
-    # Keywords: require ALL keywords to appear in title+description (case-insensitive)
-    # Use Russian stem-prefix matching to handle declension: "москва" matches "москве", "москвы", "москвой"
+    # Keywords: require ALL keywords to appear in title+description
+    # Uses Russian stem-prefix matching to handle declension: "москва" matches "москве", "москвы", "москвой"
     keywords = filters.get("keywords") or []
     if keywords:
         text = ((listing.get("title") or "") + " " + (listing.get("description") or "")).lower()
         text_words = _re.findall(r"[а-яёa-z0-9]+", text)
-        # Build prefix set (first 4 chars of each word)
+        # Build prefix set (first 4 chars of each word) for declension-tolerant matching
         text_prefixes = set()
         for w in text_words:
             if len(w) >= 4:
@@ -3914,7 +3859,6 @@ def _match_listing_to_subscription(filters: Dict[str, Any], listing: Dict[str, A
             kp = kl[:4] if len(kl) >= 4 else kl
             if kp and kp in text_prefixes:
                 continue
-            logger.info(f"matcher: keyword {kw!r} (prefix {kp!r}) not in text {text!r}")
             return False
     return True
 
@@ -3935,7 +3879,6 @@ async def _notify_match_subscribers(listing_id: str, item: ListingIn, user: Dict
         "tier": item.tier,
     }
 
-    logger.info(f"match_notify: scanning subs for listing {listing_id} cat={listing_dict['cat']} city={listing_dict.get('city')!r} price={listing_dict['price']}")
     # Fetch all active subs (small table, OK to scan; add idx on active=1 if grows)
     try:
         with db_cursor() as conn:
@@ -3946,7 +3889,6 @@ async def _notify_match_subscribers(listing_id: str, item: ListingIn, user: Dict
         logger.warning(f"match: failed to fetch subs: {e}")
         return
 
-    logger.info(f"match_notify: {len(rows)} active subs to check")
     if not rows:
         return
 
@@ -3983,7 +3925,6 @@ async def _notify_match_subscribers(listing_id: str, item: ListingIn, user: Dict
             "keywords": kw_list,
         }
         if not _match_listing_to_subscription(filters, listing_dict):
-            logger.info(f"match_notify: sub {sd['id']} did not match")
             continue
         # Already notified about this listing?
         try:
@@ -4002,7 +3943,6 @@ async def _notify_match_subscribers(listing_id: str, item: ListingIn, user: Dict
         # Send push
         uid = int(sd["user_id"])
         matched_user_ids.add(uid)
-        logger.info(f"match_notify: MATCH for sub {sd['id']} user {uid}, sending push")
         await _push_match(uid, sd["id"], listing_id, listing_dict, msg_id)
         # Log + update last_notified
         try:
