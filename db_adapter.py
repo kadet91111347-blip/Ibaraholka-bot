@@ -6,12 +6,42 @@ All existing main.py code keeps using get_db() / conn.execute / conn.row_factory
 import os
 import psycopg2
 from psycopg2.extras import RealDictCursor
+from psycopg2.pool import ThreadedConnectionPool
 from contextlib import contextmanager
+import threading
 
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 
 # When DATABASE_URL empty -> fallback to local sqlite for dev / Render free
 USE_POSTGRES = bool(DATABASE_URL)
+
+# Thread-safe connection pool — reuses TCP+TLS+auth handshake across requests
+# Each psycopg2.connect() takes ~300-500ms (Neon + Cloudflare); pool cuts it to <5ms
+_PG_POOL = None
+_PG_POOL_LOCK = threading.Lock()
+
+
+def _init_pool(minconn=1, maxconn=10):
+    """Create pool once. Returns existing pool if already initialized."""
+    global _PG_POOL
+    if _PG_POOL is not None:
+        return _PG_POOL
+    with _PG_POOL_LOCK:
+        if _PG_POOL is not None:
+            return _PG_POOL
+        try:
+            # sslmode comes from DATABASE_URL (Neon requires sslmode=require)
+            _PG_POOL = ThreadedConnectionPool(
+                minconn=minconn,
+                maxconn=maxconn,
+                dsn=DATABASE_URL,
+                connect_timeout=10,
+            )
+            print(f"[db_adapter] PG pool initialized (min={minconn}, max={maxconn})", flush=True)
+            return _PG_POOL
+        except Exception as e:
+            print(f"[db_adapter] PG pool init failed: {e}", flush=True)
+            raise _PostgresUnavailable(str(e))
 
 
 class _PostgresUnavailable(Exception):
@@ -124,13 +154,17 @@ class _PostgresCursor:
 
 
 class _PostgresConnection:
-    """Connection wrapper compatible with sqlite3.Connection usage in main.py."""
+    """Connection wrapper compatible with sqlite3.Connection usage in main.py.
+
+    Uses ThreadedConnectionPool — TCP+TLS+auth handshake happens ONCE, not per request.
+    On Neon that handshake is ~300-500ms; pool cuts it to <5ms.
+    """
     def __init__(self):
-        # Parse URL to handle sslmode correctly
         try:
-            self._conn = psycopg2.connect(DATABASE_URL, connect_timeout=10)
-            self._conn.autocommit = True
-            self._cursor = _PostgresCursor(self._conn.cursor(cursor_factory=RealDictCursor))
+            self._pooled = _init_pool(minconn=1, maxconn=10).getconn()
+            self._pooled.autocommit = True
+            self._cursor = _PostgresCursor(self._pooled.cursor(cursor_factory=RealDictCursor))
+            self._closed = False
         except Exception as e:
             print(f"[db_adapter] PG connection failed: {e}; falling back to sqlite", flush=True)
             raise _PostgresUnavailable(str(e))
@@ -157,15 +191,31 @@ class _PostgresConnection:
 
     def commit(self):
         try:
-            self._conn.commit()
+            self._pooled.commit()
+        except Exception:
+            pass
+
+    def rollback(self):
+        try:
+            self._pooled.rollback()
         except Exception:
             pass
 
     def close(self):
+        if getattr(self, "_closed", True):
+            return
+        self._closed = True
         try:
-            self._conn.close()
+            self._cursor.close()
         except Exception:
             pass
+        try:
+            _PG_POOL.putconn(self._pooled)
+        except Exception:
+            try:
+                self._pooled.close()
+            except Exception:
+                pass
 
     def cursor(self):
         return self._cursor

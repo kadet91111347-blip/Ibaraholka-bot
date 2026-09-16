@@ -32,6 +32,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Header, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import uvicorn
@@ -1126,6 +1127,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# GZip compression for responses >= 500 bytes — cuts JSON payload ~70% (3.5KB → 1KB)
+app.add_middleware(GZipMiddleware, minimum_size=500)
 
 
 @app.get("/")
