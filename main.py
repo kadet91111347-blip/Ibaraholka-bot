@@ -834,40 +834,27 @@ async def pre_checkout(query: types.PreCheckoutQuery):
 
 @dp.callback_query(F.data.startswith("confirm_paid:"))
 async def on_confirm_paid(callback: types.CallbackQuery):
-    """User tapped 'Я оплатил' — activate listing immediately."""
+    """DEPRECATED: ручное подтверждение оплаты убрано во избежание обхода.
+
+    Активация paid listing теперь происходит ТОЛЬКО через:
+    1. successful_payment (Telegram Stars) — автоматически
+    2. /payments/ton/verify — после проверки on-chain перевода
+    3. /admin/listings/{id}/approve — только админ
+
+    Если кнопка всё-таки нажата — объясняем пользователю что делать.
+    """
     listing_id = callback.data.split(":", 1)[1]
-    item_dict = None
-    with db_cursor() as conn:
-        row = conn.execute("SELECT * FROM listings WHERE id=?", (listing_id,)).fetchone()
-        if not row:
-            await callback.answer("Объявление не найдено", show_alert=True)
-            return
-        if row["user_id"] != callback.from_user.id:
-            await callback.answer("Это не твоё объявление", show_alert=True)
-            return
-        conn.execute("UPDATE listings SET status='active' WHERE id=?", (listing_id,))
-        conn.commit()
-        item_dict = {
-            "id": row["id"], "title": row["title"], "description": row["description"],
-            "price": row["price"], "cat": row["cat"], "type": row["type"],
-            "contact": row["contact"], "photo": row["photo"], "tier": row["tier"],
-            "city": row["city"],
-        }
-    await callback.answer("✅ Активировано!")
-    # Post to channel
-    try:
-        item = ListingIn(**item_dict)
-        user_dict = {
-            "id": row["user_id"], "first_name": row["user_name"], "username": row["user_username"],
-        }
-        await post_to_channel(listing_id, item, user_dict)
-    except Exception as e:
-        logger.error(f"confirm_paid post_to_channel error: {e}")
+    await callback.answer("Кнопка устарела", show_alert=True)
     try:
         await callback.message.edit_text(
-            f"✅ <b>Оплата подтверждена!</b>\n\n"
-            f"Объявление <code>{listing_id}</code> ({row['tier'].upper()}) активировано.\n"
-            f"Оно появилось в канале @ibaraholkatyt."
+            f"⚠️ <b>Эта кнопка больше не работает</b>\n\n"
+            f"Объявление <code>{listing_id}</code>:\n"
+            f"• Если оплачивали через <b>Telegram Stars</b> — оно активируется "
+            f"автоматически за пару секунд.\n"
+            f"• Если оплачивали через <b>Тинькофф</b> — пришлите боту скриншот "
+            f"чека, я активирую вручную.\n"
+            f"• Если оплачивали через <b>TON</b> — откройте Mini App и нажмите "
+            f"«✅ Я оплатил — проверить» в окне оплаты."
         )
     except Exception:
         pass
@@ -1545,8 +1532,8 @@ async def create_listing(item: ListingIn, request: Request):
                 f"💳 <b>Оплатить через Тинькофф</b> — перейдите по ссылке:\n"
                 f"https://www.tbank.ru/rm/r_TGugYbYVEb.mLmrPUwlTy/aHI4Y75190\n\n"
                 f"<b>После оплаты через Тинькофф:</b>\n"
-                f"Просто нажмите кнопку «✅ Я оплатил» ниже — объявление "
-                f"сразу появится в канале @ibaraholkatyt."
+                f"После оплаты через Тинькофф пришлите боту скриншот чека — "
+                f"активирую объявление вручную (5-10 мин)."
             )
             from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
             notify_kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -1555,12 +1542,8 @@ async def create_listing(item: ListingIn, request: Request):
                     url="https://www.tbank.ru/rm/r_TGugYbYVEb.mLmrPUwlTy/aHI4Y75190"
                 )],
                 [InlineKeyboardButton(
-                    text="✅ Я оплатил",
-                    callback_data=f"confirm_paid:{listing_id}"
-                )],
-                [InlineKeyboardButton(
                     text="📱 Открыть барахолку",
-                    web_app=WebAppInfo(url=WEBAPP_URL)
+                    web_app=WebAdmin_URL if False else WEBAPP_URL
                 )],
             ])
             await bot.send_message(user["id"], notify_text, reply_markup=notify_kb)
