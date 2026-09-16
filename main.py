@@ -2275,7 +2275,7 @@ SEED_AD_CREATIVES = [
 # Lazy seed: called inside endpoint, after init_db()
 def _seed_ads_if_empty():
     """Insert seed ads on first start (idempotent)."""
-    now = int(datetime.now().timestamp() * 1000)
+    now = int(datetime.now().timestamp())  # seconds, fits in PG INTEGER
     with db_cursor() as conn:
         cur = conn.execute("SELECT COUNT(*) AS c FROM ad_creatives")
         row = cur.fetchone()
