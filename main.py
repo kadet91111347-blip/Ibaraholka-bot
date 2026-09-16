@@ -761,51 +761,21 @@ async def cmd_learn(message: types.Message):
 
 @dp.message(Command("paid"))
 async def cmd_paid(message: types.Message):
-    """User confirms they paid for a listing via external payment (ЮMoney/Tinkoff/Sber).
-    Usage: /paid l_1789410754708
-    Auto-activates the listing and posts to channel.
+    """DEPRECATED: /paid no longer auto-activates listings (security hole).
+
+    Users must now confirm via the Mini App «✅ Я оплатил — Активировать» button,
+    which calls /payments/activate. This command only informs the user.
     """
-    parts = (message.text or "").split(maxsplit=1)
-    if len(parts) < 2:
-        await message.answer(
-            "❌ Укажи ID объявления:\n"
-            "<code>/paid l_1789410754708</code>"
-        )
-        return
-    listing_id = parts[1].strip()
-    # Find listing
-    with db_cursor() as conn:
-        row = conn.execute("SELECT * FROM listings WHERE id=?", (listing_id,)).fetchone()
-        if not row:
-            await message.answer(f"❌ Объявление <code>{listing_id}</code> не найдено")
-            return
-        # Verify ownership (user can only confirm their own listings)
-        if row["user_id"] != message.from_user.id:
-            # If user_id is fallback/demo (999999), allow any real user with the listing contact
-            if row["user_id"] not in (999999, message.from_user.id):
-                await message.answer("❌ Это не твоё объявление")
-                return
-        # Activate
-        conn.execute("UPDATE listings SET status='active' WHERE id=?", (listing_id,))
-        conn.commit()
-    # Post to channel
-    try:
-        item = ListingIn(
-            title=row["title"], description=row["description"], price=row["price"],
-            cat=row["cat"], type=row["type"], contact=row["contact"],
-            photo=row["photo"], tier=row["tier"], city=row["city"],
-        )
-        user_dict = {
-            "id": row["user_id"], "first_name": row["user_name"], "username": row["user_username"],
-        }
-        await post_to_channel(listing_id, item, user_dict)
-    except Exception as e:
-        logger.error(f"/paid post_to_channel error: {e}")
     await message.answer(
-        f"✅ <b>Оплата подтверждена!</b>\n\n"
-        f"Объявление <code>{listing_id}</code> ({row['tier'].upper()}) активировано.\n"
-        f"Оно появилось в канале @ibaraholkatyt.\n\n"
-        f"💰 Спасибо за оплату через банк!"
+        "⚠️ <b>Команда /paid больше не активирует объявления.</b>\n\n"
+        "Эта кнопка была дырой безопасности: любой владелец объявления мог "
+        "опубликовать его без реальной оплаты.\n\n"
+        "✅ <b>Что делать:</b>\n"
+        "1. Оплатите через Telegram Stars, TON или Тинькофф\n"
+        "2. Откройте объявление в Mini App\n"
+        "3. Нажмите появившуюся кнопку «Активировать»\n\n"
+        "Если оплатили, а активация не сработала — пришлите скриншот чека "
+        "сюда, активирую вручную."
     )
 
 
