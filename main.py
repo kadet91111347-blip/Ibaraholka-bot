@@ -3854,6 +3854,7 @@ async def _notify_match_subscribers(listing_id: str, item: ListingIn, user: Dict
         "tier": item.tier,
     }
 
+    logger.info(f"match_notify: scanning subs for listing {listing_id} cat={listing_dict['cat']} city={listing_dict.get('city')!r} price={listing_dict['price']}")
     # Fetch all active subs (small table, OK to scan; add idx on active=1 if grows)
     try:
         with db_cursor() as conn:
@@ -3864,6 +3865,7 @@ async def _notify_match_subscribers(listing_id: str, item: ListingIn, user: Dict
         logger.warning(f"match: failed to fetch subs: {e}")
         return
 
+    logger.info(f"match_notify: {len(rows)} active subs to check")
     if not rows:
         return
 
@@ -3900,6 +3902,7 @@ async def _notify_match_subscribers(listing_id: str, item: ListingIn, user: Dict
             "keywords": kw_list,
         }
         if not _match_listing_to_subscription(filters, listing_dict):
+            logger.info(f"match_notify: sub {sd['id']} did not match")
             continue
         # Already notified about this listing?
         try:
@@ -3918,6 +3921,7 @@ async def _notify_match_subscribers(listing_id: str, item: ListingIn, user: Dict
         # Send push
         uid = int(sd["user_id"])
         matched_user_ids.add(uid)
+        logger.info(f"match_notify: MATCH for sub {sd['id']} user {uid}, sending push")
         await _push_match(uid, sd["id"], listing_id, listing_dict, msg_id)
         # Log + update last_notified
         try:
