@@ -235,6 +235,47 @@ def init_db():
             is_lead INTEGER DEFAULT 0,
             notes TEXT DEFAULT ''
         );
+
+        -- ===== ADS / IB COINS =====
+        -- Рекламные креативы (что показывать юзеру за IB Coins)
+        CREATE TABLE IF NOT EXISTS ad_creatives (
+            id BIGINT PRIMARY KEY,
+            title TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            image_url TEXT DEFAULT '',
+            click_url TEXT DEFAULT '',
+            reward_coins INTEGER NOT NULL DEFAULT 10,
+            duration_sec INTEGER NOT NULL DEFAULT 10,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            weight INTEGER NOT NULL DEFAULT 1,
+            created INTEGER NOT NULL,
+            shown_count INTEGER DEFAULT 0,
+            click_count INTEGER DEFAULT 0
+        );
+
+        -- Просмотры рекламы (антифрод: 1 просмотр = +N монет, не чаще 1 раза в 30с на юзера)
+        CREATE TABLE IF NOT EXISTS ad_views (
+            id BIGINT PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            ad_id BIGINT NOT NULL,
+            coins_credited INTEGER NOT NULL,
+            ip TEXT DEFAULT '',
+            created INTEGER NOT NULL,
+            completed INTEGER DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_views_user ON ad_views(user_id);
+        CREATE INDEX IF NOT EXISTS idx_views_ad ON ad_views(ad_id);
+        CREATE INDEX IF NOT EXISTS idx_views_created ON ad_views(created);
+
+        -- Баланс внутренней валюты (IB Coins): 1 IB Coin = 1 Telegram Star
+        CREATE TABLE IF NOT EXISTS user_balances (
+            user_id BIGINT PRIMARY KEY,
+            coins INTEGER NOT NULL DEFAULT 0,
+            total_earned INTEGER NOT NULL DEFAULT 0,
+            total_spent INTEGER NOT NULL DEFAULT 0,
+            updated INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_balance_coins ON user_balances(coins);
         """)
 
 
@@ -2181,6 +2222,395 @@ async def ton_wallet_info():
         "wallet": TON_WALLET_ADDRESS,
         "configured": not TON_WALLET_ADDRESS.startswith("UQPLACEHOLDER"),
         "prices": TON_PRICES,
+    }
+
+
+# ============================================================
+# ADS / IB COINS — смотри рекламу, получай внутреннюю валюту
+# ============================================================
+# 1 IB Coin = 1 Telegram Star. Юзер смотрит рекламу → получает IB Coins → тратит их на оплату объявлений.
+# Реальные Telegram Stars нельзя выдавать бесплатно (нарушение ToS), поэтому это внутренняя валюта,
+# которую мы обмениваем на свои услуги (оплата listing'ов). Anti-fraud: 1 просмотр на юзера в 30 сек.
+
+AD_COOLDOWN_SEC = 30  # минимум секунд между просмотрами
+AD_DEFAULT_REWARD = 10  # IB Coins за просмотр по умолчанию
+
+# Демо-рекламные креативы — заполняются при первом старте если таблица пустая
+SEED_AD_CREATIVES = [
+    {
+        "title": "Apple AirPods Pro 2",
+        "description": "Новые. Гарантия 1 год. Доставка по Москве сегодня.",
+        "image_url": "",
+        "click_url": "https://t.me/Ibaraholka_bot",
+        "reward_coins": 10,
+        "duration_sec": 8,
+    },
+    {
+        "title": "Ремонт iPhone в Москве",
+        "description": "Замена экрана от 30 мин. Гарантия 90 дней. Рядом с метро.",
+        "image_url": "",
+        "click_url": "https://t.me/Ibaraholka_bot",
+        "reward_coins": 10,
+        "duration_sec": 8,
+    },
+    {
+        "title": "Trade-in iPhone",
+        "description": "Сдай старый — получи скидку на новый. Оценка за 5 минут.",
+        "image_url": "",
+        "click_url": "https://t.me/Ibaraholka_bot",
+        "reward_coins": 10,
+        "duration_sec": 8,
+    },
+    {
+        "title": "iPhone 15 Pro Max",
+        "description": "В наличии. Все цвета. Trade-in с доплатой.",
+        "image_url": "",
+        "click_url": "https://t.me/Ibaraholka_bot",
+        "reward_coins": 10,
+        "duration_sec": 8,
+    },
+]
+
+
+def _seed_ads_if_empty():
+    """Insert seed ads on first start (idempotent)."""
+    now = int(datetime.now().timestamp() * 1000)
+    with db_cursor() as conn:
+        cur = conn.execute("SELECT COUNT(*) FROM ad_creatives")
+        if cur.fetchone()[0] == 0:
+            for i, ad in enumerate(SEED_AD_CREATIVES, start=1):
+                conn.execute(
+                    "INSERT INTO ad_creatives (id, title, description, image_url, click_url, reward_coins, duration_sec, enabled, weight, created) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1, ?)",
+                    (i, ad["title"], ad["description"], ad["image_url"], ad["click_url"],
+                     ad["reward_coins"], ad["duration_sec"], now),
+                )
+            conn.commit()
+
+
+# Seed at module load
+try:
+    _seed_ads_if_empty()
+except Exception as e:
+    logging.warning("seed_ads failed: %s", e)
+
+
+@app.get("/ads/next")
+async def ads_next(user: Dict = Depends(get_user)):
+    """Return the next ad creative for this user. Anti-fraud: refuses if last view was < 30s ago."""
+    user_id = int(user["id"])
+    now_ms = int(datetime.now().timestamp() * 1000)
+
+    with db_cursor() as conn:
+        # Anti-fraud: последний просмотр
+        last = conn.execute(
+            "SELECT created FROM ad_views WHERE user_id=? ORDER BY created DESC LIMIT 1",
+            (user_id,),
+        ).fetchone()
+        if last and (now_ms - last[0]) < AD_COOLDOWN_SEC * 1000:
+            wait_sec = AD_COOLDOWN_SEC - int((now_ms - last[0]) / 1000)
+            return {
+                "ok": False,
+                "reason": "cooldown",
+                "wait_sec": max(wait_sec, 1),
+                "message": f"Подождите {wait_sec} сек до следующей рекламы",
+            }
+
+        # Берём случайное активное объявление (weighted by weight, без повтора последнего)
+        last_ad_row = conn.execute(
+            "SELECT ad_id FROM ad_views WHERE user_id=? ORDER BY created DESC LIMIT 1",
+            (user_id,),
+        ).fetchone()
+        last_ad_id = last_ad_row[0] if last_ad_row else None
+
+        ads = conn.execute(
+            "SELECT id, title, description, image_url, click_url, reward_coins, duration_sec "
+            "FROM ad_creatives WHERE enabled=1 ORDER BY weight DESC, RANDOM() LIMIT 20"
+        ).fetchall()
+        if not ads:
+            return {"ok": False, "reason": "no_ads", "message": "Нет активной рекламы"}
+
+        # Prefer ads different from last shown
+        candidates = [a for a in ads if a[0] != last_ad_id] or ads
+        ad = candidates[0]
+        ad_id, title, desc, img, click, reward, dur = ad
+
+        return {
+            "ok": True,
+            "ad": {
+                "id": ad_id,
+                "title": title,
+                "description": desc,
+                "image_url": img,
+                "click_url": click,
+                "reward_coins": reward,
+                "duration_sec": dur,
+            },
+        }
+
+
+@app.post("/ads/watch-complete")
+async def ads_watch_complete(request: Request, user: Dict = Depends(get_user)):
+    """User finished watching ad (after duration_sec). Credit IB Coins.
+
+    Body: {ad_id, view_id, duration_sec}
+    Server re-checks: cooldown (30s), ad exists & enabled, duration matches.
+    """
+    user_id = int(user["id"])
+    now_ms = int(datetime.now().timestamp() * 1000)
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "JSON body required")
+
+    ad_id = int(body.get("ad_id", 0))
+    if not ad_id:
+        raise HTTPException(400, "ad_id required")
+
+    with db_cursor() as conn:
+        # Re-fetch ad for reward value
+        ad_row = conn.execute(
+            "SELECT reward_coins, duration_sec, enabled FROM ad_creatives WHERE id=?",
+            (ad_id,),
+        ).fetchone()
+        if not ad_row or not ad_row[2]:
+            return {"ok": False, "error": "ad_disabled"}
+        reward, duration_sec, _ = ad_row
+
+        # Anti-fraud: cooldown check
+        last = conn.execute(
+            "SELECT created FROM ad_views WHERE user_id=? ORDER BY created DESC LIMIT 1",
+            (user_id,),
+        ).fetchone()
+        if last and (now_ms - last[0]) < AD_COOLDOWN_SEC * 1000:
+            wait_sec = AD_COOLDOWN_SEC - int((now_ms - last[0]) / 1000)
+            return {"ok": False, "error": "cooldown", "wait_sec": max(wait_sec, 1)}
+
+        # Insert view record + update balance (atomic via SQL)
+        view_id = int(now_ms) ^ user_id  # simple unique-ish
+        conn.execute(
+            "INSERT INTO ad_views (id, user_id, ad_id, coins_credited, created, completed) VALUES (?, ?, ?, ?, ?, 1)",
+            (view_id, user_id, ad_id, reward, now_ms),
+        )
+        conn.execute(
+            "UPDATE ad_creatives SET shown_count = shown_count + 1 WHERE id=?",
+            (ad_id,),
+        )
+
+        # Upsert balance
+        bal = conn.execute(
+            "SELECT coins, total_earned FROM user_balances WHERE user_id=?",
+            (user_id,),
+        ).fetchone()
+        if bal:
+            new_coins = bal[0] + reward
+            new_earned = bal[1] + reward
+            conn.execute(
+                "UPDATE user_balances SET coins=?, total_earned=?, updated=? WHERE user_id=?",
+                (new_coins, new_earned, now_ms, user_id),
+            )
+        else:
+            new_coins = reward
+            new_earned = reward
+            conn.execute(
+                "INSERT INTO user_balances (user_id, coins, total_earned, total_spent, updated) VALUES (?, ?, ?, 0, ?)",
+                (user_id, new_coins, new_earned, now_ms),
+            )
+        conn.commit()
+
+        return {
+            "ok": True,
+            "credited": reward,
+            "balance": new_coins,
+            "total_earned": new_earned,
+            "next_available_sec": AD_COOLDOWN_SEC,
+        }
+
+
+@app.post("/ads/click")
+async def ads_click(request: Request, user: Dict = Depends(get_user)):
+    """Track that user clicked the ad (analytics only, no reward)."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "JSON body required")
+    ad_id = int(body.get("ad_id", 0))
+    if not ad_id:
+        return {"ok": False, "error": "ad_id required"}
+    with db_cursor() as conn:
+        conn.execute("UPDATE ad_creatives SET click_count = click_count + 1 WHERE id=?", (ad_id,))
+        conn.commit()
+    return {"ok": True}
+
+
+@app.get("/user/balance")
+async def user_balance(user: Dict = Depends(get_user)):
+    """Return current IB Coins balance + lifetime totals."""
+    user_id = int(user["id"])
+    with db_cursor() as conn:
+        bal = conn.execute(
+            "SELECT coins, total_earned, total_spent, updated FROM user_balances WHERE user_id=?",
+            (user_id,),
+        ).fetchone()
+    if bal:
+        return {
+            "ok": True,
+            "coins": bal[0],
+            "total_earned": bal[1],
+            "total_spent": bal[2],
+            "updated": bal[3],
+        }
+    return {"ok": True, "coins": 0, "total_earned": 0, "total_spent": 0, "updated": 0}
+
+
+@app.post("/payments/coins/pay")
+async def payments_coins_pay(request: Request, user: Dict = Depends(get_user)):
+    """Pay for a listing with IB Coins.
+
+    Body: {listing_id}
+    Rules:
+    - listing must belong to user
+    - listing.status must be 'awaiting_payment' or 'paid'
+    - price_coins = TIER_PRICES[tier] (50 for premium, 150 for vip, 0 for free)
+    - coins >= price_coins → deduct, activate + post to channel
+    - else → 402 "insufficient funds"
+    """
+    user_id = int(user["id"])
+    now_ms = int(datetime.now().timestamp() * 1000)
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "JSON body required")
+    listing_id = body.get("listing_id", "")
+    if not listing_id:
+        raise HTTPException(400, "listing_id required")
+
+    with db_cursor() as conn:
+        # Lock listing row
+        row = conn.execute(
+            "SELECT id, user_id, tier, status, title, price FROM listings WHERE id=?",
+            (listing_id,),
+        ).fetchone()
+        if not row:
+            return {"ok": False, "error": "listing_not_found"}
+        if int(row[1]) != user_id:
+            return {"ok": False, "error": "not_owner"}
+        tier = row[2]
+        status = row[3]
+        title = row[4]
+
+        if tier == "free":
+            return {"ok": False, "error": "free_no_payment"}
+
+        price_coins = TIER_PRICES.get(tier, 0)
+        if price_coins <= 0:
+            return {"ok": False, "error": "invalid_tier"}
+
+        if status not in ("awaiting_payment", "paid"):
+            return {"ok": False, "error": "bad_status", "current_status": status}
+
+        # Balance check
+        bal = conn.execute(
+            "SELECT coins FROM user_balances WHERE user_id=?",
+            (user_id,),
+        ).fetchone()
+        coins = bal[0] if bal else 0
+        if coins < price_coins:
+            need = price_coins - coins
+            return {
+                "ok": False,
+                "error": "insufficient_funds",
+                "have": coins,
+                "need": price_coins,
+                "missing": need,
+                "message": f"Не хватает {need} IB Coins. Посмотрите ещё рекламу.",
+            }
+
+        # Deduct + activate
+        new_coins = coins - price_coins
+        conn.execute(
+            "UPDATE user_balances SET coins=?, total_spent=total_spent+?, updated=? WHERE user_id=?",
+            (new_coins, price_coins, now_ms, user_id),
+        )
+
+        # Activate listing (set expires_at if missing)
+        expires_at = int(datetime.now().timestamp()) + TIER_DURATIONS.get(tier, 7 * 86400)
+        conn.execute(
+            "UPDATE listings SET status='active', paid_at=?, expires_at=? WHERE id=?",
+            (now_ms, expires_at, listing_id),
+        )
+        conn.commit()
+
+    # Post to channel (outside the DB transaction so we can use bot)
+    post_result = None
+    try:
+        if bot:
+            post_result = await post_to_channel(listing_id)
+    except Exception as e:
+        logging.warning("post_to_channel after coins payment failed: %s", e)
+
+    # Notify user
+    try:
+        if bot:
+            await bot.send_message(
+                user_id,
+                f"🪙 Оплачено {price_coins} IB Coins!\n\n"
+                f"📦 <b>{title}</b>\n\n"
+                f"✅ Объявление активировано и опубликовано в канале.",
+                parse_mode=ParseMode.HTML,
+            )
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "charged": price_coins,
+        "balance": new_coins,
+        "listing_id": listing_id,
+        "status": "active",
+        "posted": post_result is not None,
+    }
+
+
+@app.get("/admin/ads")
+async def admin_ads(request: Request, x_admin_token: str = Header(None, alias="x-admin-token")):
+    """Admin: list all ad creatives + view stats."""
+    if x_admin_token != ADMIN_TOKEN:
+        raise HTTPException(403, "Admin token required")
+    with db_cursor() as conn:
+        ads = conn.execute(
+            "SELECT id, title, description, image_url, click_url, reward_coins, duration_sec, enabled, weight, "
+            "shown_count, click_count, created FROM ad_creatives ORDER BY id"
+        ).fetchall()
+        stats = conn.execute(
+            "SELECT COUNT(*) AS total_views, COALESCE(SUM(coins_credited),0) AS coins_paid, "
+            "COUNT(DISTINCT user_id) AS unique_users FROM ad_views"
+        ).fetchone()
+        bal_totals = conn.execute(
+            "SELECT COALESCE(SUM(coins),0) AS outstanding, COALESCE(SUM(total_earned),0) AS all_earned, "
+            "COALESCE(SUM(total_spent),0) AS all_spent FROM user_balances"
+        ).fetchone()
+    return {
+        "ok": True,
+        "ads": [
+            {
+                "id": a[0], "title": a[1], "description": a[2], "image_url": a[3],
+                "click_url": a[4], "reward_coins": a[5], "duration_sec": a[6],
+                "enabled": bool(a[7]), "weight": a[8], "shown_count": a[9],
+                "click_count": a[10], "created": a[11],
+            } for a in ads
+        ],
+        "stats": {
+            "total_views": stats[0],
+            "coins_paid": stats[1],
+            "unique_users": stats[2],
+        },
+        "balances": {
+            "outstanding": bal_totals[0],
+            "total_earned": bal_totals[1],
+            "total_spent": bal_totals[2],
+        },
     }
 
 
