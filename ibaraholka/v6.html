@@ -315,11 +315,19 @@
           '</div>' +
           '<div style="font-size:10px;color:#9A9AA8;margin-bottom:12px;text-align:center;font-family:monospace">' + esc(result.id) + '</div>' +
           '<button type="button" class="pay-btn" style="background:linear-gradient(135deg,#FFD700,#FF8A4C);color:#0B0B0F" onclick="window.__payStars && window.__payStars(\'' + esc(result.id) + '\')">⭐ Оплатить Telegram Stars</button>' +
+          '<div id="miniStarsAfterPay" style="display:none">' +
+            '<div style="font-size:11px;color:#FFD700;text-align:center;margin:8px 0">✓ Оплатили Stars? Нажмите чтобы проверить</div>' +
+            '<button type="button" class="pay-btn" id="miniStarsConfirm" style="background:#22C55E;color:#0B0B0F;font-weight:800">✅ Я оплатил — проверить</button>' +
+            '<div id="miniStarsStatus" style="font-size:10px;color:#9A9AA8;text-align:center;margin-top:6px;min-height:14px"></div>' +
+          '</div>' +
           '<div style="text-align:center;margin:10px 0 6px;color:rgba(255,255,255,0.4);font-size:11px">— или картой через Тинькофф —</div>' +
           '<div id="miniTinkoffBlock">' +
-            '<a class="pay-btn" id="miniTinkoffPayLink" style="background:linear-gradient(135deg,#FFDD2D,#FFCC00);color:#0B0B0F;text-decoration:none;display:flex;align-items:center;justify-content:center;font-weight:800;font-weight:800" href="https://www.tbank.ru/rm/r_TGugYbYVEb.mLmrPUwlTy/aHI4Y75190">💳 Открыть оплату в Тинькофф</a>' +
-            '<div style="font-size:9px;color:#9A9AA8;text-align:center;margin-bottom:8px">Сумма: <b>' + rub + ' ₽</b> · после оплаты вернись сюда и нажми кнопку ниже</div>' +
-            '<button type="button" class="pay-btn" id="miniTinkoffConfirm" style="background:#22C55E;color:#0B0B0F;font-weight:800">✅ Я оплатил — активировать</button>' +
+            '<a class="pay-btn" id="miniTinkoffPayLink" style="background:linear-gradient(135deg,#FFDD2D,#FFCC00);color:#0B0B0F;text-decoration:none;display:flex;align-items:center;justify-content:center;font-weight:800" href="https://www.tbank.ru/rm/r_TGugYbYVEb.mLmrPUwlTy/aHI4Y75190">💳 Открыть оплату в Тинькофф</a>' +
+            '<div style="font-size:9px;color:#9A9AA8;text-align:center;margin-bottom:8px">Сумма: <b>' + rub + ' ₽</b></div>' +
+            '<div id="miniTinkoffAfterPay" style="display:none">' +
+              '<div style="font-size:11px;color:#FFD700;text-align:center;margin-bottom:8px">✓ Оплатили? Нажмите чтобы активировать</div>' +
+              '<button type="button" class="pay-btn" id="miniTinkoffConfirm" style="background:#22C55E;color:#0B0B0F;font-weight:800">✅ Я оплатил — активировать</button>' +
+            '</div>' +
             '<div id="miniTinkoffStatus" style="font-size:10px;color:#9A9AA8;text-align:center;margin-top:6px;min-height:14px"></div>' +
           '</div>' +
           '<div style="text-align:center;margin:10px 0 6px;color:rgba(255,255,255,0.4);font-size:11px">— или криптой TON —</div>' +
@@ -334,9 +342,9 @@
             '<div id="miniTonStatus" style="font-size:10px;color:#9A9AA8;margin-top:6px;min-height:14px"></div>' +
           '</div>' +
           '<div class="pay-info">' +
-            '⭐ <b>Stars</b> — мгновенная активация внутри Telegram.<br>' +
-            '💳 <b>Тинькофф</b> — после оплаты нажми «✅ Я оплатил», объявление активируется автоматически.<br>' +
-            '💎 <b>TON</b> — перевод из Tonkeeper, проверка в блокчейне.' +
+            '⭐ <b>Stars</b> — откройте оплату, после возвраща нажмите «✅ Я оплатил».<br>' +
+            '💳 <b>Тинькофф</b> — откройте оплату, после возвраща нажмите «✅ Я оплатил».<br>' +
+            '💎 <b>TON</b> — перевод из Tonkeeper, проверка в блокчейне или кнопка ниже.' +
           '</div>' +
           '<button type="button" class="pay-close" onclick="window.__payClose && window.__payClose(true)">Закрыть</button>' +
         '</div>';
@@ -350,20 +358,31 @@
       if (tConf) {
         // Tinkoff payment link — open via Telegram.WebApp.openLink for mobile reliability
         var tPayLink = document.getElementById('miniTinkoffPayLink');
+        var tAfter = document.getElementById('miniTinkoffAfterPay');
         if (tPayLink) {
           tPayLink.onclick = function(ev) {
             ev.preventDefault();
+            // Remember we sent user to Tinkoff — when they return, "activated"
+            // event will surface the "I paid" button + start polling.
+            window.__pendingPayment = {id: result.id, tier: item.tier, method: 'Tinkoff'};
             openExternal('https://www.tbank.ru/rm/r_TGugYbYVEb.mLmrPUwlTy/aHI4Y75190', 'Tinkoff');
+            // Show the "I paid" confirm button ONLY after the user opened Tinkoff
+            if (tAfter) tAfter.style.display = 'block';
             tStat.style.color = '#FFD700';
-            tStat.textContent = 'После оплаты в Тинькофф вернись сюда и нажми «Я оплатил»';
-            // Start polling so ЮKassa webhook / Stars success also shows success
-            pollUntilActive(result.id, 'Tinkoff/ЮKassa');
+            tStat.innerHTML = '💳 Оплатите <b>' + rub + ' ₽</b> в Тинькофф. После — нажмите «Я оплатил».<br><span style="color:#9A9AA8">⏳ Слежу за статусом автоматически…</span>';
+            // Auto-polling: if ЮKassa webhook / admin activate / etc. fires
+            // before user clicks "I paid", green modal will pop up on its own.
+            pollUntilActive(result.id, 'Тинькофф');
+            // Scroll the button into view (in case Tinkoff opened in browser tab)
+            setTimeout(function() {
+              if (tAfter) tAfter.scrollIntoView({behavior: 'smooth', block: 'center'});
+            }, 1500);
             return false;
           };
         }
         tConf.onclick = async function() {
           tConf.disabled = true;
-          tConf.textContent = '⏳ Активирую…';
+          tConf.textContent = '⏳ Фиксирую оплату…';
           tStat.style.color = '#FFD700';
           tStat.textContent = 'Отправляю запрос…';
           try {
@@ -376,12 +395,12 @@
             });
             var data = await r.json();
             if (data.ok) {
+              // Status is now 'paid' — poll will surface "Активировать" prompt
               tStat.style.color = '#3DDC97';
-              tStat.innerHTML = '✅ Активировано! Открывается зелёное окно…';
+              tStat.textContent = '✅ Оплата зафиксирована. Открываю окно подтверждения…';
               tConf.textContent = '✓ Готово';
-              setTimeout(function() {
-                showPaymentSuccess(result.id, {tier: item.tier, channel_message_id: data.channel_message_id, is_active: true}, 'Тинькофф');
-              }, 400);
+              // pollUntilActive will detect status='paid' and show the prompt
+              pollUntilActive(result.id, 'Тинькофф');
             } else {
               tStat.style.color = '#FF6B6B';
               tStat.textContent = '⚠️ ' + (data.error || 'ошибка');
@@ -425,6 +444,9 @@
             return;
           }
           miniState = data;
+          // Remember TON payment intent — when user returns from Tonkeeper,
+          // "activated" event surfaces "I paid" button + auto-polls.
+          window.__pendingPayment = {id: result.id, tier: item.tier, method: 'TON', comment: data.comment};
           document.getElementById('miniTonAmt').textContent = data.amount_ton;
           document.getElementById('miniTonWallet').textContent = data.wallet;
           document.getElementById('miniTonComment').textContent = data.comment;
@@ -433,6 +455,9 @@
           miniPanel.style.display = 'block';
           miniBtn.textContent = '💎 Свернуть';
           miniBtn.disabled = false;
+          // Auto-polling: if backend flips status to 'active' (via admin
+          // activate / ЮKassa webhook / other path), green modal pops up.
+          pollUntilActive(result.id, 'TON');
         } catch (e) {
           miniStatus.style.color = '#FF6B6B';
           miniStatus.textContent = '⚠️ ' + e.message;
@@ -457,11 +482,11 @@
           var data = await r.json();
           if (data.ok && data.verified) {
             miniStatus.style.color = '#3DDC97';
-            miniStatus.innerHTML = '✅ <b>Оплата подтверждена!</b> Объявление активировано.';
+            miniStatus.innerHTML = '✅ <b>Оплата подтверждена!</b> Открываю окно активации…';
             miniVerify.textContent = '✓ Готово';
-            // Reuse the big green success modal
+            // Status is now 'paid' — surface the activation prompt
             setTimeout(function() {
-              showPaymentSuccess(result.id, {tier: item.tier, channel_message_id: null, is_active: true}, 'TON');
+              showPaymentPaidPrompt(result.id, {tier: item.tier, channel_message_id: null, status: 'paid'}, 'TON');
             }, 500);
           } else {
             miniStatus.style.color = '#FF8A4C';
@@ -483,16 +508,65 @@
     // Click Stars -> open bot chat, then poll /listings/{id}/status every 2s.
     // When backend marks listing as 'active' (successful_payment handler fires),
     // we show the green ✅ modal and reload the feed.
+    var sAfter = document.getElementById('miniStarsAfterPay');
+    var sConf = document.getElementById('miniStarsConfirm');
+    var sStat = document.getElementById('miniStarsStatus');
+    // Show the "I paid" confirm button ONLY after the user opened the bot chat
+    if (sAfter) sAfter.style.display = 'block';
+    if (sStat) {
+      sStat.style.color = '#FFD700';
+      sStat.innerHTML = '⭐ Оплатите <b>' + stars + ' Stars</b> в личке у бота. После — вернись сюда и нажмите «Я оплатил».<br><span style="color:#9A9AA8">⏳ Слежу за статусом автоматически…</span>';
+    }
     toast('⭐ Оплатите в личке у бота, окно само обновится', 'gold');
+    // Remember we sent user to bot chat — when they return, "activated" event
+    // will surface the "I paid" button + start polling.
+    window.__pendingPayment = {id: listingId, method: 'Stars'};
     openExternal('https://t.me/Ibaraholka_bot', 'Stars');
     pollUntilActive(listingId, 'Stars');
+    // Wire manual confirm button: poll current status, if active -> success
+    if (sConf && !sConf.__wired) {
+      sConf.__wired = true;
+      sConf.onclick = async function() {
+        sConf.disabled = true;
+        sConf.textContent = '⏳ Проверяю…';
+        if (sStat) { sStat.style.color = '#FFD700'; sStat.textContent = 'Проверяю статус Stars…'; }
+        try {
+          var r = await fetch(API + '/listings/' + encodeURIComponent(listingId) + '/status');
+          var data = await r.json();
+          if (data.ok && data.is_active) {
+            // Stars path: backend already activated + posted (auto, since Telegram confirms payment)
+            sStat.style.color = '#3DDC97';
+            sStat.textContent = '✅ Оплата найдена!';
+            sConf.textContent = '✓ Готово';
+            showPaymentSuccess(listingId, data, 'Stars');
+          } else if (data.ok && data.status === 'paid') {
+            // Two-step path: ask user to confirm publication
+            sStat.style.color = '#3DDC97';
+            sStat.textContent = '✅ Stars зачислены. Открываю окно подтверждения…';
+            sConf.textContent = '✓ Готово';
+            showPaymentPaidPrompt(listingId, data, 'Stars');
+          } else {
+            sStat.style.color = '#FF8A4C';
+            sStat.textContent = '⏳ Stars ещё не пришли. Дождитесь уведомления об успешной оплате от бота и нажмите снова.';
+            sConf.disabled = false;
+            sConf.textContent = '✅ Я оплатил — проверить';
+          }
+        } catch (e) {
+          sStat.style.color = '#FF6B6B';
+          sStat.textContent = '⚠️ ' + e.message;
+          sConf.disabled = false;
+          sConf.textContent = '✅ Я оплатил — проверить';
+        }
+      };
+    }
   }
 
   async function pollUntilActive(listingId, method) {
-    // Wait for backend successful_payment / ton verify / admin approve to flip
-    // status from awaiting_payment -> active. We poll /listings/{id}/status.
+    // Two-step flow:
+    //   1. status='awaiting_payment' → waiting for the bank/blockchain to confirm
+    //   2. status='paid'            → money deducted; show "Activate" modal
+    //   3. status='active'          → published; show green success modal
     var pm = document.getElementById('pay-modal');
-    // Add status line into the modal
     var statusDiv = document.getElementById('pay-poll-status');
     if (!statusDiv && pm) {
       statusDiv = document.createElement('div');
@@ -518,9 +592,14 @@
           showPaymentSuccess(listingId, j, method);
           return;
         }
+        if (j.ok && j.status === 'paid') {
+          // Money has been deducted — show the "Activate" prompt
+          showPaymentPaidPrompt(listingId, j, method);
+          return;
+        }
         if (statusDiv) {
           var secsLeft = (maxTries - tries) * 2;
-          statusDiv.innerHTML = '⏳ Жду подтверждения оплаты… (' + Math.floor(secsLeft / 60) + ':' + String(secsLeft % 60).padStart(2, '0') + ')';
+          statusDiv.innerHTML = '⏳ Жду списания денег… (' + Math.floor(secsLeft / 60) + ':' + String(secsLeft % 60).padStart(2, '0') + ')';
         }
       } catch (e) {
         // network blip — keep polling
@@ -530,6 +609,61 @@
       statusDiv.style.color = '#FF6B6B';
       statusDiv.innerHTML = '⚠️ Таймаут 5 мин. Если оплатили — пришлите боту скриншот чека.';
     }
+  }
+
+  function showPaymentPaidPrompt(listingId, status, method) {
+    // Intermediate modal: payment deducted, awaiting user confirmation to publish
+    var old = document.getElementById('pay-paid-prompt');
+    if (old) old.remove();
+    var div = document.createElement('div');
+    div.id = 'pay-paid-prompt';
+    div.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:300;display:flex;align-items:center;justify-content:center;padding:14px';
+    var tierLabel = status.tier === 'vip' ? 'VIP 7 дней' : (status.tier === 'premium' ? 'TOP 24 часа' : status.tier);
+    div.innerHTML =
+      '<div style="background:#1A1A22;border:1px solid #22C55E;border-radius:20px;padding:24px 22px;max-width:380px;width:100%;text-align:center">' +
+        '<div style="font-size:36px;margin-bottom:10px">✅</div>' +
+        '<div style="font-size:20px;font-weight:800;color:#22C55E;margin-bottom:6px">Оплата прошла!</div>' +
+        '<div style="font-size:13px;color:#9A9AA8;margin-bottom:18px">' + esc(tierLabel) + ' · ' + esc(method || '') + '<br>Деньги списаны. Нажмите кнопку ниже, чтобы опубликовать объявление.</div>' +
+        '<button type="button" class="pay-btn" style="background:#22C55E;color:#0B0B0F;margin-bottom:10px" id="pay-activate-btn">✅ Активировать объявление</button>' +
+        '<div style="font-size:11px;color:#9A9AA8">Можно нажать позже — статус сохранится в ленте.</div>' +
+      '</div>';
+    document.body.appendChild(div);
+    try {
+      if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.HapticFeedback) {
+        window.Telegram.WebApp.HapticFeedback.notificationOccurred('success');
+      }
+    } catch (e) {}
+    document.getElementById('pay-activate-btn').onclick = async function() {
+      var btn = document.getElementById('pay-activate-btn');
+      btn.disabled = true;
+      btn.textContent = '⏳ Публикую…';
+      try {
+        var tgUser = (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initDataUnsafe && window.Telegram.WebApp.initDataUnsafe.user) || null;
+        var uid = (tgUser && tgUser.id) || 748834052;
+        var resp = await fetch(API + '/payments/activate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ listing_id: listingId, user_id: uid })
+        });
+        var d = await resp.json();
+        if (d.ok) {
+          div.remove();
+          showPaymentSuccess(listingId, {
+            tier: status.tier,
+            channel_message_id: d.channel_message_id,
+            is_active: true
+          }, method);
+        } else {
+          btn.disabled = false;
+          btn.textContent = '✅ Активировать объявление';
+          alert('⚠️ Не получилось: ' + (d.error || 'unknown'));
+        }
+      } catch (e) {
+        btn.disabled = false;
+        btn.textContent = '✅ Активировать объявление';
+        alert('⚠️ Сеть: ' + e.message);
+      }
+    };
   }
 
   function showPaymentSuccess(listingId, status, method) {
@@ -572,6 +706,7 @@
   }
 
   function paySuccessClose() {
+    window.__pendingPayment = null;
     var ps = document.getElementById('pay-success');
     if (ps) ps.remove();
     var pm = document.getElementById('pay-modal');
@@ -581,6 +716,7 @@
   }
 
   function payClose(reload) {
+    window.__pendingPayment = null;
     var pm = document.getElementById('pay-modal');
     if (pm) pm.remove();
     if (reload) { closeModal(); loadListings(); }
@@ -736,6 +872,48 @@
         // 5. Скрываем main button если нет действий (на старте нет смысла)
         if (tg.MainButton) {
           try { tg.MainButton.hide(); } catch (e) {}
+        }
+        // 6. Слушаем событие activated — пользователь вернулся в Mini App
+        //    из банка/кошелька (видел чек). Если была открыта модалка оплаты —
+        //    автоматически показываем кнопку "Я оплатил" и запускаем polling.
+        if (tg.onEvent) {
+          tg.onEvent('activated', function() {
+            try {
+              var pending = window.__pendingPayment;
+              if (!pending || !pending.id) return;
+              // If we already showed green modal, do nothing
+              if (document.getElementById('pay-success')) return;
+              // Show the right "I paid" block depending on the method
+              if (pending.method === 'Stars') {
+                var sAfter = document.getElementById('miniStarsAfterPay');
+                var sStat = document.getElementById('miniStarsStatus');
+                if (sAfter) sAfter.style.display = 'block';
+                if (sStat) {
+                  sStat.style.color = '#3DDC97';
+                  sStat.innerHTML = '👋 Вы вернулись. Если Stars списались — нажмите <b>«Я оплатил»</b>.';
+                }
+              } else if (pending.method === 'Tinkoff') {
+                var tAfter = document.getElementById('miniTinkoffAfterPay');
+                var tStat = document.getElementById('miniTinkoffStatus');
+                if (tAfter) tAfter.style.display = 'block';
+                if (tStat) {
+                  tStat.style.color = '#3DDC97';
+                  tStat.innerHTML = '👋 Вы вернулись из Тинькофф. Если видите <b>чек об успешной оплате</b> — нажмите <b>«Я оплатил»</b>.';
+                }
+              } else if (pending.method === 'TON') {
+                var miniStat = document.getElementById('miniTonStatus');
+                if (miniStat) {
+                  miniStat.style.color = '#3DDC97';
+                  miniStat.innerHTML = '👋 Вы вернулись. Если TON ушли из кошелька — нажмите <b>«Я оплатил»</b>.';
+                }
+              }
+              // Re-poll — backend may have flipped status while user was away
+              pollUntilActive(pending.id, pending.method);
+            } catch (e) {}
+          });
+          tg.onEvent('deactivated', function() {
+            // User switched away (to bank / wallet / bot chat). No-op — we wait for 'activated'.
+          });
         }
         // 6. Блокируем вертикальные свайпы на закрытие
         if (tg.isVerticalSwipesEnabled !== undefined) {

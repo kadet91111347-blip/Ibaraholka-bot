@@ -1779,13 +1779,12 @@ async def tinkoff_notify(request: Request):
       1. User clicks "Оплатить через Тинькофф" → opens Tinkoff payment link
       2. Pays through bank (card/SBP/any method)
       3. Returns to Mini App, presses "✅ Я оплатил"
-      4. Backend IMMEDIATELY activates listing + posts to channel
-      5. Parallel: admin gets Telegram notification for visual reconciliation
+      4. Backend marks listing as `paid` (NOT active yet — user must confirm)
+      5. Mini App shows "✅ Оплата прошла! [Активировать объявление]" button
+      6. User clicks → POST /payments/activate → status=active + post to channel
 
-    This removes manual moderation step. Risk of fraud is bounded:
-    - Listing only stays visible if admin later disputes via /admin/listings/{id}/reject
-    - User is identified by Telegram ID and the exact listing they own
-    - All activations are logged with user_id + timestamp for audit
+    Two-step flow prevents premature publication: user only sees the
+    "published" green modal after they themselves confirm.
     """
     body = await request.json()
     listing_id = body.get("listing_id", "")
@@ -1797,10 +1796,6 @@ async def tinkoff_notify(request: Request):
     if not user_id:
         return {"ok": False, "error": "no user_id"}
 
-    # Verify the listing exists and belongs to this user
-    item_dict = None
-    owner_info = None
-    expected_amount_rub = 0
     with db_cursor() as conn:
         row = conn.execute(
             "SELECT * FROM listings WHERE id=?", (listing_id,)
@@ -1809,17 +1804,74 @@ async def tinkoff_notify(request: Request):
             return {"ok": False, "error": "listing_not_found"}
         if row["user_id"] != user_id:
             return {"ok": False, "error": "not_owner"}
-        # Already active? Return current state.
+        if row["status"] not in ("awaiting_payment", "paid"):
+            return {"ok": False, "error": f"bad_status:{row['status']}"}
+        # Already paid? Just return state.
+        if row["status"] == "paid":
+            return {
+                "ok": True,
+                "status": "paid",
+                "listing_id": listing_id,
+                "instruction": "Оплата зафиксирована. Нажмите «Активировать объявление» в Mini App.",
+            }
+        # Mark as paid (NOT active yet — user must explicitly activate)
+        conn.execute(
+            "UPDATE listings SET status='paid', paid_at=extract(epoch from now())::bigint WHERE id=?",
+            (listing_id,),
+        )
+        conn.commit()
+
+    # Audit log + admin heads-up
+    try:
+        import logging
+        logging.info(f"PAYMENT_PAID listing={listing_id} user={user_id} tier={tier} method=Tinkoff")
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "status": "paid",
+        "listing_id": listing_id,
+        "instruction": "Оплата зафиксирована. Нажмите «Активировать объявление» в Mini App.",
+    }
+
+
+@app.post("/payments/activate")
+async def payments_activate(request: Request):
+    """Step 2: user confirms publication after seeing payment deducted.
+
+    Used by all 3 methods (Tinkoff / Stars / TON) — backend checks status='paid'
+    and only then flips to active + posts to channel.
+    """
+    body = await request.json()
+    listing_id = body.get("listing_id", "")
+    user_id = int(body.get("user_id", 0) or 0)
+
+    if not listing_id:
+        return {"ok": False, "error": "no listing_id"}
+    if not user_id:
+        return {"ok": False, "error": "no user_id"}
+
+    item_dict = None
+    owner_info = None
+    with db_cursor() as conn:
+        row = conn.execute(
+            "SELECT * FROM listings WHERE id=?", (listing_id,)
+        ).fetchone()
+        if not row:
+            return {"ok": False, "error": "listing_not_found"}
+        if row["user_id"] != user_id:
+            return {"ok": False, "error": "not_owner"}
+        # Already active? Return current state (idempotent).
         if row["status"] == "active":
             return {
                 "ok": True,
                 "activated": listing_id,
                 "already_active": True,
                 "channel_message_id": row["channel_message_id"],
-                "instruction": "Уже активно",
             }
-        if row["status"] != "awaiting_payment":
-            return {"ok": False, "error": f"bad_status:{row['status']}"}
+        if row["status"] != "paid":
+            return {"ok": False, "error": f"bad_status:{row['status']} (нужно сначала оплатить)"}
 
         item_dict = {
             "id": row["id"], "title": row["title"], "description": row["description"],
@@ -1830,9 +1882,6 @@ async def tinkoff_notify(request: Request):
         owner_info = {
             "id": row["user_id"], "first_name": row["user_name"], "username": row["user_username"]
         }
-        # Expected amount based on tier (matches payment link)
-        tier = row["tier"]
-        expected_amount_rub = int(TIER_PRICES.get(tier, 0) * 1.4)
 
         conn.execute("UPDATE listings SET status='active' WHERE id=?", (listing_id,))
         conn.commit()
@@ -1865,30 +1914,9 @@ async def tinkoff_notify(request: Request):
             ])
             await bot.send_message(user_id, text, reply_markup=kb)
     except Exception as e:
-        print(f"tinkoff_notify user notify error: {e}", flush=True)
+        print(f"payments_activate user notify error: {e}", flush=True)
 
-    # Notify admins for visual reconciliation (does NOT block activation)
-    if ADMIN_IDS:
-        try:
-            admin_text = (
-                f"💳 <b>Тинькофф оплата (auto-активировано)</b>\n\n"
-                f"Листинг: <code>{listing_id}</code>\n"
-                f"Тариф: {tier.upper()}\n"
-                f"Ожидаемая сумма: <b>{expected_amount_rub} ₽</b>\n"
-                f"User: {owner_info['first_name']} (@{owner_info['username'] or '—'}, id {user_id})\n"
-                f"Канал: msg #{channel_msg_id or '—'}\n\n"
-                f"<i>Проверь поступление в ЛК Тинькофф → История операций. "
-                f"Если сумма не пришла — /admin/listings/{listing_id}/reject</i>"
-            )
-            for admin_id in ADMIN_IDS:
-                try:
-                    await bot.send_message(admin_id, admin_text)
-                except Exception:
-                    pass
-        except Exception as e:
-            print(f"tinkoff_notify admin notify error: {e}", flush=True)
-
-    log_msg = f"[TINKOFF] auto-activated listing={listing_id} tier={tier} user={user_id} amount_rub={expected_amount_rub}"
+    log_msg = f"[ACTIVATE] listing={listing_id} user={user_id} channel_msg={channel_msg_id}"
     print(log_msg, flush=True)
     try:
         with open("/data/last_post.log", "a") as f:
@@ -1900,7 +1928,6 @@ async def tinkoff_notify(request: Request):
         "ok": True,
         "activated": listing_id,
         "channel_message_id": channel_msg_id,
-        "expected_amount_rub": expected_amount_rub,
     }
 
 
@@ -1934,15 +1961,19 @@ async def yukassa_webhook(request: Request):
         if not listing_id:
             return {"ok": False, "error": "no listing_id in metadata"}
 
-        # Activate listing
+        # Mark as paid (NOT active — user must confirm via Mini App button)
         item_dict = None
         with db_cursor() as conn:
             row = conn.execute(
                 "SELECT * FROM listings WHERE id=?", (listing_id,)
             ).fetchone()
-            if row:
-                conn.execute("UPDATE listings SET status='active' WHERE id=?", (listing_id,))
-                conn.commit()
+            if row and row["status"] in ("awaiting_payment", "paid"):
+                if row["status"] != "paid":
+                    conn.execute(
+                        "UPDATE listings SET status='paid', paid_at=extract(epoch from now())::bigint WHERE id=?",
+                        (listing_id,),
+                    )
+                    conn.commit()
                 item_dict = {
                     "id": row["id"], "title": row["title"], "description": row["description"],
                     "price": row["price"], "cat": row["cat"], "type": row["type"],
@@ -1950,24 +1981,15 @@ async def yukassa_webhook(request: Request):
                     "city": row["city"],
                 }
 
-        # Post to channel
-        if item_dict:
-            try:
-                user = {"id": int(user_id) if user_id else 0, "first_name": "Покупатель", "username": ""}
-                listing_in = ListingIn(**item_dict)
-                await post_to_channel(listing_id, listing_in, user)
-            except Exception as e:
-                print(f"YooKassa webhook post_to_channel error: {e}", flush=True)
-
-        # Notify user via Telegram
+        # Notify user via Telegram (ask to open Mini App and press Activate)
         try:
             if user_id and bot is not None:
                 amount = obj.get("amount", {}).get("value", "?")
                 text = (
                     f"✅ <b>Оплата получена!</b>\n\n"
-                    f"Объявление <code>{listing_id}</code> ({tier.upper()}) активировано.\n"
+                    f"Объявление <code>{listing_id}</code> ({tier.upper()}) готово к публикации.\n"
                     f"💰 Списано: {amount} ₽\n\n"
-                    f"Оно появилось в канале @ibaraholkatyt."
+                    f"Откройте Mini App и нажмите «Активировать объявление» — оно появится в канале."
                 )
                 kb = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="📱 Открыть барахолку", web_app=WebAppInfo(url=WEBAPP_URL))]
@@ -2135,11 +2157,13 @@ async def ton_verify_payment(request: Request):
             row = conn.execute(
                 "SELECT * FROM listings WHERE id=?", (listing_id,)
             ).fetchone()
-            if row:
-                conn.execute(
-                    "UPDATE listings SET status='active' WHERE id=?", (listing_id,)
-                )
-                conn.commit()
+            if row and row["status"] in ("awaiting_payment", "paid"):
+                if row["status"] != "paid":
+                    conn.execute(
+                        "UPDATE listings SET status='paid', paid_at=extract(epoch from now())::bigint WHERE id=?",
+                        (listing_id,),
+                    )
+                    conn.commit()
                 item_dict = {
                     "id": row["id"], "title": row["title"], "description": row["description"],
                     "price": row["price"], "cat": row["cat"], "type": row["type"],
@@ -2149,28 +2173,15 @@ async def ton_verify_payment(request: Request):
             else:
                 item_dict = None
 
-        # Post to channel.
-        if item_dict:
-            try:
-                user = {
-                    "id": int(user_id) if user_id else 0,
-                    "first_name": "Покупатель",
-                    "username": "",
-                }
-                listing_in = ListingIn(**item_dict)
-                await post_to_channel(listing_id, listing_in, user)
-            except Exception as e:
-                print(f"TON verify post_to_channel error: {e}", flush=True)
-
-        # Notify user.
+        # Notify user (Mini App polling will pick up status='paid' and show Activate button)
         try:
             if user_id and bot is not None:
                 text = (
                     f"✅ <b>Оплата TON получена!</b>\n\n"
-                    f"Объявление <code>{listing_id}</code> ({tier.upper()}) активировано.\n"
+                    f"Объявление <code>{listing_id}</code> ({tier.upper()}) готово к публикации.\n"
                     f"💎 Списано: {TON_PRICES[tier]} TON\n"
                     f"🔗 Tx: <code>{tx_hash[:16]}…</code>\n\n"
-                    f"Оно появилось в канале @ibaraholkatyt."
+                    f"Откройте Mini App и нажмите «Активировать объявление»."
                 )
                 kb = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="📱 Открыть барахолку", web_app=WebAppInfo(url=WEBAPP_URL))]
@@ -2301,9 +2312,9 @@ async def confirm_paid_http(listing_id: str, request: Request):
     without leaving the WebApp. The OAuth / Telegram initData header carries
     the user's identity; the listing must belong to that user.
 
-    On success: sets status='active' and posts the listing to the channel.
-    The post_to_channel() gate I added earlier ensures only paid+active ads
-    reach @ibaraholkatyt.
+    Two-step flow: marks listing as `paid` (NOT active yet). User must then
+    press the "Активировать объявление" button in Mini App (POST /payments/activate)
+    for the listing to actually publish to the channel.
     """
     user = await get_user(request.headers.get("authorization", ""))
     with db_cursor() as conn:
@@ -2315,30 +2326,24 @@ async def confirm_paid_http(listing_id: str, request: Request):
         # Ownership check (demo/admin bypass allowed)
         if row["user_id"] not in (999999, user["id"]) and user["id"] not in ADMIN_IDS:
             raise HTTPException(403, "Not your listing")
-        # Activate
-        conn.execute("UPDATE listings SET status='active' WHERE id=?", (listing_id,))
+        if row["status"] == "active":
+            return {
+                "ok": True,
+                "listing_id": listing_id,
+                "tier": row["tier"],
+                "status": "active",
+                "already_active": True,
+            }
+        if row["status"] not in ("awaiting_payment", "paid"):
+            raise HTTPException(400, f"bad_status:{row['status']}")
+        # Mark as paid; user must then call /payments/activate to publish.
+        conn.execute(
+            "UPDATE listings SET status='paid', paid_at=extract(epoch from now())::bigint WHERE id=?",
+            (listing_id,),
+        )
         conn.commit()
-        item_dict = {
-            "title": row["title"], "description": row["description"],
-            "price": row["price"], "cat": row["cat"], "type": row["type"],
-            "contact": row["contact"], "photo": row["photo"],
-            "tier": row["tier"], "city": row["city"],
-        }
 
-    # Post to channel (paid gate inside post_to_channel will allow this since status=active)
-    posted_msg_id = None
-    try:
-        from main import ListingIn  # type: ignore  # local class, import-safe
-        item = ListingIn(**item_dict)
-        user_dict = {
-            "id": row["user_id"], "first_name": row["user_name"],
-            "username": row["user_username"],
-        }
-        posted_msg_id = await post_to_channel(listing_id, item, user_dict)
-    except Exception as e:
-        logger.error(f"confirm_paid_http post_to_channel error: {e}")
-
-    # Try to notify the user in Telegram (if we know their chat_id and bot is up)
+    # Notify user (Mini App will see status='paid' via /status endpoint and show Activate button)
     try:
         if bot is not None and row["user_id"] and row["user_id"] != 999999:
             tier_name = "TOP 24 часа" if row["tier"] == "premium" else (
@@ -2346,9 +2351,9 @@ async def confirm_paid_http(listing_id: str, request: Request):
             )
             await bot.send_message(
                 row["user_id"],
-                f"✅ <b>Оплата подтверждена!</b>\n\n"
-                f"Объявление <code>{listing_id}</code> ({tier_name}) активировано.\n"
-                f"Оно появилось в канале @ibaraholkatyt.",
+                f"✅ <b>Оплата зафиксирована!</b>\n\n"
+                f"Объявление <code>{listing_id}</code> ({tier_name}) готово к публикации.\n\n"
+                f"Откройте Mini App и нажмите «Активировать объявление».",
             )
     except Exception as e:
         logger.warning(f"confirm_paid_http notify error: {e}")
@@ -2357,9 +2362,8 @@ async def confirm_paid_http(listing_id: str, request: Request):
         "ok": True,
         "listing_id": listing_id,
         "tier": row["tier"],
-        "status": "active",
-        "posted_to_channel": posted_msg_id is not None,
-        "channel_message_id": posted_msg_id,
+        "status": "paid",
+        "instruction": "Оплата зафиксирована. Нажмите «Активировать объявление» в Mini App.",
     }
 
 
