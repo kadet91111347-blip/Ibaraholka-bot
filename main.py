@@ -1860,14 +1860,6 @@ async def create_yukassa_payment(request: Request):
 
 @app.post("/payments/tinkoff/notify")
 async def tinkoff_notify(request: Request):
-    import traceback
-    try:
-        return await _tinkoff_notify_impl(request)
-    except Exception as e:
-        return {"ok": False, "error": f"unhandled:{type(e).__name__}:{e}", "trace": traceback.format_exc()[-1500:]}
-
-
-async def _tinkoff_notify_impl(request: Request):
     """User-driven Tinkoff payment confirmation.
 
     Flow (no merchant API available for solo/self-employed):
@@ -1910,11 +1902,11 @@ async def _tinkoff_notify_impl(request: Request):
                     (int(time.time()), deal_id),
                 )
                 conn.commit()
-            logging.info(f"DEAL_ESCROWED deal={deal_id} user={user_id}")
+            logger.info(f"DEAL_ESCROWED deal={deal_id} user={user_id}")
             return {"ok": True, "status": "escrowed", "deal_id": deal_id,
                     "instruction": "Деньги в гаранте. Продавец скоро отправит."}
         except Exception as e:
-            logging.exception(f"tinkoff_notify deal error: {e}")
+            logger.exception(f"tinkoff_notify deal error: {e}")
             return {"ok": False, "error": f"deal_path: {e}"}
 
     if not listing_id:
@@ -1947,8 +1939,7 @@ async def _tinkoff_notify_impl(request: Request):
 
     # Audit log + admin heads-up
     try:
-        import logging
-        logging.info(f"PAYMENT_PAID listing={listing_id} user={user_id} tier={tier} method=Tinkoff")
+        logger.info(f"PAYMENT_PAID listing={listing_id} user={user_id} tier={tier} method=Tinkoff")
     except Exception:
         pass
 
@@ -4463,18 +4454,6 @@ def test_postgres():
                 }
     except Exception as e:
         return {"ok": False, "error": str(e)[:300], "debug": dbg}
-
-
-@app.get("/debug/test-deal-flow")
-def test_deal_flow(deal_id: str = ""):
-    """Reproduce tinkoff/notify deal branch to see where it fails."""
-    try:
-        with db_cursor() as conn:
-            row = conn.execute("SELECT * FROM deals WHERE id=?", (deal_id,)).fetchone()
-            return {"ok": True, "row_type": str(type(row)), "row_is_dict": isinstance(row, dict), "row": str(row)[:500]}
-    except Exception as e:
-        import traceback
-        return {"ok": False, "error": str(e), "trace": traceback.format_exc()}
 
 
 if __name__ == "__main__":
