@@ -133,7 +133,8 @@ def init_db():
             status TEXT DEFAULT 'pending',
             created INTEGER NOT NULL,
             expires_at INTEGER,
-            channel_message_id INTEGER DEFAULT NULL
+            channel_message_id INTEGER DEFAULT NULL,
+            paid_at INTEGER DEFAULT NULL
         );
         """)
         # Add column if upgrading (SQLite supports ALTER TABLE ADD COLUMN with try/except)
@@ -148,6 +149,7 @@ def init_db():
             conn.execute("ALTER TABLE listings ALTER COLUMN created TYPE BIGINT")
             conn.execute("ALTER TABLE listings ALTER COLUMN expires_at TYPE BIGINT")
             conn.execute("ALTER TABLE listings ALTER COLUMN channel_message_id TYPE BIGINT")
+            conn.execute("ALTER TABLE listings ADD COLUMN IF NOT EXISTS paid_at INTEGER DEFAULT NULL")
         except Exception:
             pass  # SQLite doesn't support ALTER COLUMN — silent skip
         # Same upgrade for conversations / ai_responses / variant_stats / user_profiles / learned_patterns
