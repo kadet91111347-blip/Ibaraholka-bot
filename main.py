@@ -3824,10 +3824,20 @@ def _parse_match_query(raw_query: str) -> Dict[str, Any]:
 
     # Keywords: split into tokens, drop price/city/color/cat words + stopwords
     stop = set(["в", "до", "и", "или", "не", "с", "по", "на", "за", "из", "от", "для", "это", "мне", "мне нужен", "мне нужна", "хочу", "ищу", "купить", "продается", "макс", "максимум", "руб", "рублей", "тыс", "тысяч", "идеале", "идеально", "состоянии", "хорошем"])
+    # City/color tokens to drop (they're already in dedicated fields)
+    cities_drop = set(["москва", "спб", "санкт", "петербург", "екатеринбург", "казань", "новосибирск", "краснодар", "нижний", "новгород", "самара", "ростов", "уфа", "челябинск"])
+    colors_drop = set(["чёрный", "черный", "белый", "серый", "синий", "красный", "зелёный", "зелёные", "золотой", "серебристый", "розовый", "фиолетовый"])
+    cat_drop = set(["iphone", "айфон", "ipad", "айпад", "mac", "мак", "macbook", "watch", "часы", "airpods", "наушники", "аксессуар", "аксессуары", "чехол"])
     tokens = _re.findall(r"[a-zа-яё0-9]+", q)
     keywords = []
     for t in tokens:
         if t in stop:
+            continue
+        if t in cities_drop:
+            continue
+        if t in colors_drop:
+            continue
+        if t in cat_drop:
             continue
         # Drop price-like tokens: "30", "30к", "30тыс", "30000", "30 000"
         if t.isdigit():
@@ -3884,13 +3894,28 @@ def _match_listing_to_subscription(filters: Dict[str, Any], listing: Dict[str, A
             logger.info(f"matcher: color {filters['color']!r} not in text")
             return False
     # Keywords: require ALL keywords to appear in title+description (case-insensitive)
+    # Use Russian stem-prefix matching to handle declension: "москва" matches "москве", "москвы", "москвой"
     keywords = filters.get("keywords") or []
     if keywords:
         text = ((listing.get("title") or "") + " " + (listing.get("description") or "")).lower()
+        text_words = _re.findall(r"[а-яёa-z0-9]+", text)
+        # Build prefix set (first 4 chars of each word)
+        text_prefixes = set()
+        for w in text_words:
+            if len(w) >= 4:
+                text_prefixes.add(w[:4])
+            elif len(w) >= 2:
+                text_prefixes.add(w)
         for kw in keywords:
-            if kw not in text:
-                logger.info(f"matcher: keyword {kw!r} not in text {text!r}")
-                return False
+            kl = kw.lower()
+            if kl in text:
+                continue  # exact substring match
+            # Try stem-prefix match (handles Russian declension)
+            kp = kl[:4] if len(kl) >= 4 else kl
+            if kp and kp in text_prefixes:
+                continue
+            logger.info(f"matcher: keyword {kw!r} (prefix {kp!r}) not in text {text!r}")
+            return False
     return True
 
 
