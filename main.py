@@ -350,6 +350,42 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_payouts_user ON payouts(user_id);
         CREATE INDEX IF NOT EXISTS idx_payouts_status ON payouts(status);
+
+        -- ===== БОТ-ПОДБИРАТЕЛЬ / Match agent =====
+        -- Юзер подписывается на запрос типа "iPhone 13 до 30К в Москве" — бот пушит подходящие объявления
+        CREATE TABLE IF NOT EXISTS match_subscriptions (
+            id TEXT PRIMARY KEY,                  -- MS-XXXXXX
+            user_id BIGINT NOT NULL,
+            user_name TEXT,
+            user_username TEXT,
+            query TEXT NOT NULL,                  -- сырой запрос юзера: "iPhone 13 до 30К в Москве, чёрный"
+            keywords TEXT NOT NULL,               -- нормализованные ключевые слова для матчинга (через запятую)
+            cat TEXT,                             -- iphone / airpods / ipad / mac / watch / accs / NULL
+            max_price_rub BIGINT,                 -- NULL если не указано
+            city TEXT,                            -- NULL если любой
+            color TEXT,                           -- чёрный / белый / NULL
+            extra TEXT,                           -- любые доп. пожелания: "в идеале", "без царапин"
+            active INTEGER NOT NULL DEFAULT 1,    -- 1 = активна, 0 = отключена
+            is_free INTEGER NOT NULL DEFAULT 0,   -- 1 = бесплатная первая подписка
+            paid_until INTEGER,                   -- unix sec — когда заканчивается оплаченный период
+            created INTEGER NOT NULL,
+            last_notified INTEGER                 -- для rate-limit: не спамить чаще 1 раза в минуту
+        );
+        CREATE INDEX IF NOT EXISTS idx_match_user ON match_subscriptions(user_id);
+        CREATE INDEX IF NOT EXISTS idx_match_active ON match_subscriptions(active) WHERE active=1;
+        CREATE INDEX IF NOT EXISTS idx_match_cat ON match_subscriptions(cat);
+        CREATE INDEX IF NOT EXISTS idx_match_city ON match_subscriptions(city);
+
+        -- Лог отправленных матчей (чтобы не дублировать пуши)
+        CREATE TABLE IF NOT EXISTS match_log (
+            id BIGSERIAL PRIMARY KEY,
+            subscription_id TEXT NOT NULL,
+            listing_id TEXT NOT NULL,
+            sent_at INTEGER NOT NULL,
+            delivered INTEGER NOT NULL DEFAULT 1   -- 0 если бот не смог доставить (юзер заблокировал)
+        );
+        CREATE INDEX IF NOT EXISTS idx_match_log_sub ON match_log(subscription_id);
+        CREATE INDEX IF NOT EXISTS idx_match_log_listing ON match_log(listing_id);
         """)
 
 
@@ -894,6 +930,191 @@ async def cmd_paid(message: types.Message):
     )
 
 
+@dp.message(Command("find"))
+async def cmd_find(message: types.Message):
+    """Bot-side parser for /find <query> — same parser as /match/subscribe.
+    Creates subscription for the user (1st is free, then coins).
+    """
+    text = (message.text or "").strip()
+    parts = text.split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        await message.answer(
+            "🔔 <b>Бот-подбиратель</b>\n\n"
+            "Опиши что ищешь — буду присылать подходящие объявления в личку.\n\n"
+            "<b>Примеры:</b>\n"
+            "• /find iPhone 13 до 30К в Москве, чёрный\n"
+            "• /find AirPods Pro в идеале\n"
+            "• /find iPad 64 ГБ в Спб\n\n"
+            "<i>Первая подписка — бесплатно. Дальше 5 монет (посмотри рекламу) или 50 ⭐.</i>"
+        )
+        return
+    raw_query = parts[1].strip()
+
+    user = {"id": message.from_user.id, "first_name": message.from_user.first_name or "", "username": message.from_user.username or ""}
+
+    parsed = _parse_match_query(raw_query)
+    if not parsed["keywords"] and not parsed["cat"]:
+        await message.answer(
+            "❌ Не понял запрос. Укажи товар (iPhone/AirPods/iPad/Mac/Watch) или конкретную модель.\n\n"
+            "<b>Примеры:</b>\n"
+            "• /find iPhone 13 до 30К в Москве\n"
+            "• /find AirPods Pro в идеале"
+        )
+        return
+
+    now = int(time.time())
+    user_id = int(user["id"])
+    try:
+        with db_cursor() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS c, SUM(is_free) AS f FROM match_subscriptions WHERE user_id=? AND active=1",
+                (user_id,),
+            ).fetchone()
+            cnt = int(row["c"]) if (row and row.get("c") is not None) else 0
+            free_cnt = int(row["f"]) if (row and row.get("f") is not None) else 0
+    except Exception:
+        cnt = 0
+        free_cnt = 0
+
+    is_free = (cnt == 0)
+    sub_id = "MS-" + uuid.uuid4().hex[:6].upper()
+
+    if is_free:
+        try:
+            with db_cursor() as conn:
+                conn.execute(
+                    "INSERT INTO match_subscriptions "
+                    "(id, user_id, user_name, user_username, query, keywords, cat, max_price_rub, city, color, extra, active, is_free, paid_until, created, last_notified) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,1,1,NULL,?,NULL)",
+                    (sub_id, user_id, user.get("first_name", ""), user.get("username", ""),
+                     raw_query, ",".join(parsed["keywords"]), parsed["cat"], parsed["max_price"],
+                     parsed["city"], parsed["color"], parsed["extra"], now),
+                )
+                conn.commit()
+        except Exception as e:
+            await message.answer(f"❌ Ошибка создания подписки: {e}")
+            return
+
+        lines = []
+        if parsed["cat"]: lines.append(f"📦 Категория: {parsed['cat']}")
+        if parsed["max_price"]: lines.append(f"💰 До {parsed['max_price']:,} ₽".replace(",", " "))
+        if parsed["city"]: lines.append(f"📍 Город: {parsed['city']}")
+        if parsed["color"]: lines.append(f"🎨 Цвет: {parsed['color']}")
+        if parsed["keywords"]:
+            kw_display = ", ".join(parsed["keywords"][:8])
+            if len(parsed["keywords"]) > 8: kw_display += f" +{len(parsed['keywords'])-8}"
+            lines.append(f"🔍 Ключевые слова: {kw_display}")
+        summary = "\n".join(lines) if lines else "—"
+
+        await message.answer(
+            f"✅ <b>Подписка создана бесплатно!</b>\n"
+            f"ID: <code>{sub_id}</code>\n\n"
+            f"{summary}\n\n"
+            f"Как только появится объявление по твоему запросу — пришлю в личку.\n\n"
+            f"Управлять: /mysubs · отключить: /stop {sub_id}"
+        )
+    else:
+        await message.answer(
+            f"💎 <b>У тебя уже есть бесплатная подписка</b>.\n\n"
+            f"Дополнительная подписка:\n"
+            f"• <b>5 монет</b> в месяц — посмотри рекламу в Mini App и оплати\n"
+            f"• <b>50 Stars</b> через Telegram Stars\n\n"
+            f"Открой Mini App → «🔔 Подобрать за меня» → укажи запрос и выбери способ оплаты."
+        )
+
+
+@dp.message(Command("mysubs"))
+async def cmd_mysubs(message: types.Message):
+    user_id = message.from_user.id
+    try:
+        with db_cursor() as conn:
+            rows = conn.execute(
+                "SELECT id, query, cat, max_price_rub, city, color, is_free, paid_until, created FROM match_subscriptions WHERE user_id=? AND active=1 ORDER BY created DESC",
+                (user_id,),
+            ).fetchall()
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
+        return
+    if not rows:
+        await message.answer(
+            "🔔 У тебя нет активных подписок на подбор.\n\n"
+            "Создай: /find iPhone 13 до 30К в Москве"
+        )
+        return
+    lines = ["🔔 <b>Твои подписки:</b>\n"]
+    for r in rows:
+        def _g(r, k, idx):
+            try:
+                if hasattr(r, "keys"): return r[k]
+                return r[idx]
+            except: return None
+        sid = _g(r, "id", 0); q = _g(r, "query", 1); cat = _g(r, "cat", 2); maxp = _g(r, "max_price_rub", 3)
+        city = _g(r, "city", 4); color = _g(r, "color", 5); is_free = _g(r, "is_free", 6)
+        tags = []
+        if cat: tags.append(cat)
+        if maxp: tags.append(f"до {int(maxp):,} ₽".replace(",", " "))
+        if city: tags.append(city)
+        if color: tags.append(color)
+        tag_str = ", ".join(tags) if tags else "любые"
+        type_str = "🆓" if is_free else "💎"
+        lines.append(f"{type_str} <code>{sid}</code> — <i>{q}</i>\n   {tag_str}")
+    lines.append(f"\nОтключить: /stop MS-XXXXXX")
+    await message.answer("\n".join(lines))
+
+
+@dp.message(Command("stop"))
+async def cmd_stop(message: types.Message):
+    text = (message.text or "").strip()
+    parts = text.split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        await message.answer("Укажи ID подписки: /stop MS-XXXXXX")
+        return
+    sub_id = parts[1].strip().upper()
+    if not sub_id.startswith("MS-"):
+        sub_id = "MS-" + sub_id
+    user_id = message.from_user.id
+    try:
+        with db_cursor() as conn:
+            row = conn.execute("SELECT user_id FROM match_subscriptions WHERE id=?", (sub_id,)).fetchone()
+            if not row:
+                await message.answer(f"❌ Подписка <code>{sub_id}</code> не найдена.")
+                return
+            owner = int(row["user_id"]) if hasattr(row, "keys") else int(row[0])
+            if owner != user_id:
+                await message.answer("❌ Это не твоя подписка.")
+                return
+            conn.execute("UPDATE match_subscriptions SET active=0 WHERE id=?", (sub_id,))
+            conn.commit()
+        await message.answer(f"✅ Подписка <code>{sub_id}</code> отключена.")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
+
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("match_stop:"))
+async def cb_match_stop(call: types.CallbackQuery):
+    sub_id = call.data.split(":", 1)[1]
+    try:
+        with db_cursor() as conn:
+            row = conn.execute("SELECT user_id FROM match_subscriptions WHERE id=?", (sub_id,)).fetchone()
+            if not row:
+                await call.answer("Подписка уже отключена", show_alert=True)
+                return
+            owner = int(row["user_id"]) if hasattr(row, "keys") else int(row[0])
+            if owner != call.from_user.id:
+                await call.answer("Это не твоя подписка", show_alert=True)
+                return
+            conn.execute("UPDATE match_subscriptions SET active=0 WHERE id=?", (sub_id,))
+            conn.commit()
+        await call.answer("Отключено ✅", show_alert=False)
+        if call.message:
+            try:
+                await call.message.edit_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+    except Exception as e:
+        await call.answer(f"Ошибка: {e}", show_alert=True)
+
+
 @dp.message(Command("stats"))
 async def cmd_stats(message: types.Message):
     if message.from_user.id not in ADMIN_IDS and ADMIN_IDS:
@@ -1160,6 +1381,11 @@ async def post_to_channel(listing_id: str, item: ListingIn, user: Dict[str, Any]
                 conn.execute("UPDATE listings SET channel_message_id=? WHERE id=?", (msg_id, listing_id))
                 conn.commit()
             print(f"[POST_CHANNEL] {listing_id}: SAVED msg_id={msg_id}", flush=True)
+            # Fire-and-forget: notify match-subscribers (does not block post)
+            try:
+                await _notify_match_subscribers(listing_id, item, user, msg_id)
+            except Exception as e:
+                logger.warning(f"match_notify failed for {listing_id}: {e}")
             return msg_id
         else:
             print(f"[POST_CHANNEL] {listing_id}: API error: {result}", flush=True)
@@ -3466,6 +3692,420 @@ async def payouts_request(request: Request, user: Dict = Depends(get_user)):
             logging.warning(f"admin payout notify failed: {e}")
 
     return {"ok": True, "payout_id": payout_id, "status": "pending"}
+
+
+# ============================================================
+# Бот-подбиратель (match agent) — AI-агент в личке
+# ============================================================
+import re as _re
+
+def _parse_match_query(raw_query: str) -> Dict[str, Any]:
+    """Parse natural language → structured filters.
+
+    Examples:
+      'iPhone 13 до 30К в Москве, чёрный' →
+          {keywords:['iphone','13'], cat:'iphone', max_price:30000, city:'Москва', color:'чёрный'}
+      'AirPods Pro в идеале' →
+          {keywords:['airpods','pro'], cat:'airpods', extra:'в идеале'}
+    """
+    q = (raw_query or "").strip().lower()
+    if not q:
+        return {"keywords": [], "cat": None, "max_price": None, "city": None, "color": None, "extra": None}
+
+    # Price: "до 30к", "до 30000", "до 30 000", "< 30к"
+    max_price = None
+    m = _re.search(r"(?:до|<|макс(?:имум)?\s*)?\s*(\d{1,3}(?:[ \u00a0]?\d{3})*|\d+)\s*к", q)
+    if m:
+        try:
+            n = int(_re.sub(r"[ \u00a0]", "", m.group(1)))
+            if n > 100:
+                max_price = n  # "до 30к" → 30000? Actually 30к = 30000 already if user typed 30 and 'к'. 30к → 30*1000 = 30000.
+            else:
+                max_price = n * 1000  # "до 30к" parsed as '30' → 30000
+        except Exception:
+            pass
+    # Override: extract direct big numbers without "к"
+    if max_price is None:
+        m = _re.search(r"(?:до|<)\s*(\d{4,7})", q)
+        if m:
+            try:
+                max_price = int(m.group(1))
+            except Exception:
+                pass
+
+    # Cat: detect product family
+    cat = None
+    cat_map = {
+        "iphone": "iphone", "айфон": "iphone",
+        "ipad": "ipad", "айпад": "ipad",
+        "mac": "mac", "мак": "mac", "macbook": "mac",
+        "watch": "watch", "часы": "watch",
+        "airpods": "airpods", "наушники": "airpods",
+        "аксессуар": "accs", "аксессуары": "accs", "чехол": "accs",
+    }
+    for kw, c in cat_map.items():
+        if kw in q:
+            cat = c
+            break
+
+    # City: common big cities (Russian)
+    city = None
+    cities = ["москва", "спб", "санкт-петербург", "петербург", "екатеринбург", "казань", "новосибирск", "краснодар", "нижний новгород", "самара", "ростов", "уфа", "челябинск"]
+    for c in cities:
+        if c in q:
+            city = "Москва" if c == "москва" else ("Санкт-Петербург" if c in ("спб", "санкт-петербург", "петербург") else c.capitalize())
+            break
+
+    # Color
+    color = None
+    for c in ["чёрный", "черный", "белый", "серый", "синий", "красный", "зелёный", "золотой", "серебристый", "розовый", "фиолетовый"]:
+        if c in q:
+            color_map = {"чёрный": "чёрный", "черный": "чёрный", "белый": "белый", "серый": "серый", "синий": "синий", "красный": "красный", "зелёный": "зелёный", "золотой": "золотой", "серебристый": "серебристый", "розовый": "розовый", "фиолетовый": "фиолетовый"}
+            color = color_map.get(c, c)
+            break
+
+    # Keywords: split into tokens, drop price/city/color/cat words + stopwords
+    stop = set(["в", "до", "и", "или", "не", "с", "по", "на", "за", "из", "от", "для", "это", "мне", "мне нужен", "мне нужна", "хочу", "ищу", "купить", "продается", "макс", "максимум", "руб", "рублей", "тыс", "тысяч", "идеале", "идеально", "состоянии", "хорошем"])
+    tokens = _re.findall(r"[a-zа-яё0-9]+", q)
+    keywords = []
+    for t in tokens:
+        if t in stop:
+            continue
+        if t.isdigit() and len(t) <= 4:
+            continue  # short numbers = prices
+        if len(t) < 2:
+            continue
+        keywords.append(t)
+    # Dedupe
+    seen = set()
+    keywords = [k for k in keywords if not (k in seen or seen.add(k))]
+
+    # Extra: words we didn't capture but may be meaningful ("идеале", "без царапин", etc.)
+    extras = []
+    for phrase in ["без царапин", "в идеале", "в идеальном", "новый", "б/у", "бу", "оригинал", "с коробкой", "с чеком", "гарантия"]:
+        if phrase in q:
+            extras.append(phrase)
+
+    return {
+        "keywords": keywords,
+        "cat": cat,
+        "max_price": max_price,
+        "city": city,
+        "color": color,
+        "extra": "; ".join(extras) if extras else None,
+    }
+
+
+def _match_listing_to_subscription(filters: Dict[str, Any], listing: Dict[str, Any]) -> bool:
+    """Pure-Python matcher (no LLM). Returns True if listing matches filters."""
+    # Cat
+    if filters.get("cat") and listing.get("cat") != filters["cat"]:
+        return False
+    # Price
+    if filters.get("max_price") is not None:
+        price = int(listing.get("price") or 0)
+        if price > filters["max_price"]:
+            return False
+    # City (substring match — listing.city may have district)
+    if filters.get("city"):
+        fc = filters["city"].lower()
+        lc = (listing.get("city") or "").lower()
+        if fc not in lc and lc not in fc:
+            return False
+    # Color — check title + description
+    if filters.get("color"):
+        text = ((listing.get("title") or "") + " " + (listing.get("description") or "")).lower()
+        if filters["color"].lower() not in text:
+            return False
+    # Keywords: require ALL keywords to appear in title+description (case-insensitive)
+    keywords = filters.get("keywords") or []
+    if keywords:
+        text = ((listing.get("title") or "") + " " + (listing.get("description") or "")).lower()
+        for kw in keywords:
+            if kw not in text:
+                return False
+    return True
+
+
+async def _notify_match_subscribers(listing_id: str, item: ListingIn, user: Dict[str, Any], msg_id: int):
+    """Called by post_to_channel after a successful publish.
+    Notifies all active subscriptions whose filters match this listing.
+    Rate-limited: each (subscription, listing) pair only fires once.
+    """
+    now = int(time.time())
+    listing_dict = {
+        "id": listing_id,
+        "title": item.title,
+        "description": getattr(item, "description", "") or "",
+        "price": item.price,
+        "cat": item.cat,
+        "city": item.city,
+        "tier": item.tier,
+    }
+
+    # Fetch all active subs (small table, OK to scan; add idx on active=1 if grows)
+    try:
+        with db_cursor() as conn:
+            rows = conn.execute(
+                "SELECT * FROM match_subscriptions WHERE active=1"
+            ).fetchall()
+    except Exception as e:
+        logger.warning(f"match: failed to fetch subs: {e}")
+        return
+
+    if not rows:
+        return
+
+    # Iterate
+    matched_user_ids = set()
+    for row in rows:
+        # Dict/tuple agnostic access
+        def _g(r, k, idx):
+            try:
+                if hasattr(r, "keys"):
+                    return r[k]
+                return r[idx]
+            except Exception:
+                return None
+        sd = {
+            "id": _g(row, "id", 0),
+            "user_id": _g(row, "user_id", 1),
+            "keywords": _g(row, "keywords", 5),
+            "cat": _g(row, "cat", 6),
+            "max_price_rub": _g(row, "max_price_rub", 7),
+            "city": _g(row, "city", 8),
+            "color": _g(row, "color", 9),
+            "last_notified": _g(row, "last_notified", 14),
+        }
+        try:
+            kw_list = [k.strip() for k in (sd["keywords"] or "").split(",") if k.strip()]
+        except Exception:
+            kw_list = []
+        filters = {
+            "cat": sd["cat"],
+            "max_price": int(sd["max_price_rub"]) if sd["max_price_rub"] is not None else None,
+            "city": sd["city"],
+            "color": sd["color"],
+            "keywords": kw_list,
+        }
+        if not _match_listing_to_subscription(filters, listing_dict):
+            continue
+        # Already notified about this listing?
+        try:
+            with db_cursor() as conn:
+                dup = conn.execute(
+                    "SELECT id FROM match_log WHERE subscription_id=? AND listing_id=?",
+                    (sd["id"], listing_id),
+                ).fetchone()
+                if dup:
+                    continue
+        except Exception:
+            pass
+        # Rate-limit per-sub: skip if notified <60s ago
+        if sd["last_notified"] and (now - int(sd["last_notified"])) < 60:
+            continue
+        # Send push
+        uid = int(sd["user_id"])
+        matched_user_ids.add(uid)
+        await _push_match(uid, sd["id"], listing_id, listing_dict, msg_id)
+        # Log + update last_notified
+        try:
+            with db_cursor() as conn:
+                conn.execute(
+                    "INSERT INTO match_log (subscription_id, listing_id, sent_at) VALUES (?,?,?)",
+                    (sd["id"], listing_id, now),
+                )
+                conn.execute(
+                    "UPDATE match_subscriptions SET last_notified=? WHERE id=?",
+                    (now, sd["id"]),
+                )
+                conn.commit()
+        except Exception as e:
+            logger.warning(f"match: failed to log for {sd['id']}: {e}")
+
+
+async def _push_match(user_id: int, sub_id: str, listing_id: str, listing: Dict[str, Any], msg_id: int):
+    """Send push notification to user about matching listing."""
+    if not BOT_TOKEN:
+        return
+    try:
+        price_str = f"{listing['price']:,}".replace(",", " ") + " ₽"
+        text = (
+            f"🔔 <b>Нашёл по твоему запросу!</b>\n\n"
+            f"<b>{listing['title']}</b>\n"
+            f"💰 {price_str}\n"
+            f"📍 {listing.get('city','')}\n\n"
+            f"Открыть: https://ibaraholka.p.spru.io/"
+        )
+        kb = {
+            "inline_keyboard": [
+                [{"text": "👀 Посмотреть", "url": f"https://t.me/ibaraholkatyt/{msg_id}"}],
+                [{"text": "🔕 Отключить эту подписку", "callback_data": f"match_stop:{sub_id}"}],
+            ]
+        }
+        payload = {
+            "chat_id": str(user_id),
+            "text": text,
+            "parse_mode": "HTML",
+            "reply_markup": json.dumps(kb),
+            "disable_web_page_preview": "true",
+        }
+        import urllib.request
+        import urllib.parse
+        data = urllib.parse.urlencode(payload).encode()
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            data=data,
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = json.loads(resp.read().decode())
+        if not result.get("ok"):
+            err = result.get("description", "")
+            if "blocked" in err.lower() or "deactivated" in err.lower() or "chat not found" in err.lower():
+                # User blocked bot — deactivate all their subs
+                try:
+                    with db_cursor() as conn:
+                        conn.execute("UPDATE match_subscriptions SET active=0 WHERE user_id=?", (user_id,))
+                        conn.commit()
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.warning(f"push_match failed for user {user_id}: {e}")
+
+
+@app.post("/match/subscribe")
+async def match_subscribe(request: Request, user: Dict = Depends(get_user)):
+    """Create a new match subscription.
+
+    Body: {query: str, payment_method?: 'free'|'coins'|'stars'}
+    - 1-я активная подписка — бесплатно навсегда
+    - Дальше: 5 IB Coins (списание с user_balances) или 50 Stars через Telegram invoice
+    """
+    body = await request.json()
+    raw_query = (body.get("query") or "").strip()
+    payment_method = body.get("payment_method", "free")
+    if not raw_query:
+        return {"ok": False, "error": "empty_query"}
+    if len(raw_query) > 500:
+        return {"ok": False, "error": "query_too_long"}
+
+    user_id = int(user["id"])
+    parsed = _parse_match_query(raw_query)
+    if not parsed["keywords"] and not parsed["cat"]:
+        return {"ok": False, "error": "could_not_parse", "hint": "Укажи товар (iPhone/AirPods/iPad/Mac) или конкретную модель"}
+
+    # Check existing subs to decide free vs paid
+    now = int(time.time())
+    sub_id = "MS-" + uuid.uuid4().hex[:6].upper()
+    is_free = False
+    try:
+        with db_cursor() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS c, SUM(is_free) AS f FROM match_subscriptions WHERE user_id=? AND active=1",
+                (user_id,),
+            ).fetchone()
+            cnt = int(row["c"]) if (row and row.get("c") is not None) else 0
+            free_cnt = int(row["f"]) if (row and row.get("f") is not None) else 0
+    except Exception:
+        cnt = 0
+        free_cnt = 0
+
+    # 1st active subscription is free
+    if cnt == 0:
+        is_free = True
+    elif free_cnt > 0:
+        # user already used their free one
+        is_free = False
+    else:
+        is_free = False
+
+    # For paid: charge coins / stars
+    if not is_free:
+        if payment_method == "coins":
+            # Check + deduct 5 coins
+            try:
+                with db_cursor() as conn:
+                    bal = conn.execute(
+                        "SELECT coins FROM user_balances WHERE user_id=?",
+                        (user_id,),
+                    ).fetchone()
+                    have = int(bal["coins"]) if bal and bal.get("coins") is not None else 0
+                    if have < 5:
+                        return {"ok": False, "error": "insufficient_coins", "have": have, "need": 5,
+                                "hint": "Посмотри рекламу в Mini App или пополни баланс"}
+                    conn.execute(
+                        "UPDATE user_balances SET coins=coins-5, updated=? WHERE user_id=?",
+                        (now, user_id),
+                    )
+                    conn.commit()
+            except Exception as e:
+                return {"ok": False, "error": f"coins_charge_failed: {e}"}
+        elif payment_method == "stars":
+            # Stars handled client-side via Telegram invoice; we just create paid sub
+            pass  # actual deduction via successful_payment → /match/stars-confirm
+        else:
+            return {"ok": False, "error": "payment_required", "need_payment": True, "free_used": free_cnt > 0}
+
+    # Create subscription
+    try:
+        with db_cursor() as conn:
+            conn.execute(
+                "INSERT INTO match_subscriptions "
+                "(id, user_id, user_name, user_username, query, keywords, cat, max_price_rub, city, color, extra, active, is_free, paid_until, created, last_notified) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,NULL)",
+                (sub_id, user_id, user.get("first_name", ""), user.get("username", ""),
+                 raw_query, ",".join(parsed["keywords"]), parsed["cat"], parsed["max_price"],
+                 parsed["city"], parsed["color"], parsed["extra"], 1 if is_free else 0,
+                 (now + 30*86400) if not is_free else None, now),
+            )
+            conn.commit()
+    except Exception as e:
+        return {"ok": False, "error": f"create_failed: {e}"}
+
+    return {"ok": True, "subscription_id": sub_id, "filters": parsed,
+            "is_free": is_free, "message": "Подписка создана — буду присылать подходящие объявления"}
+
+
+@app.get("/match/subscriptions")
+async def match_list(user: Dict = Depends(get_user)):
+    """List current user's match subscriptions."""
+    user_id = int(user["id"])
+    try:
+        with db_cursor() as conn:
+            rows = conn.execute(
+                "SELECT * FROM match_subscriptions WHERE user_id=? ORDER BY created DESC",
+                (user_id,),
+            ).fetchall()
+        out = []
+        for row in rows:
+            sd = dict(row) if hasattr(row, "keys") else {}
+            sd["active"] = bool(sd.get("active"))
+            sd["is_free"] = bool(sd.get("is_free"))
+            out.append(sd)
+        return {"ok": True, "subscriptions": out, "count": len(out)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.delete("/match/subscriptions/{sub_id}")
+async def match_unsubscribe(sub_id: str, user: Dict = Depends(get_user)):
+    """Deactivate a subscription (soft-delete)."""
+    user_id = int(user["id"])
+    try:
+        with db_cursor() as conn:
+            row = conn.execute(
+                "SELECT user_id FROM match_subscriptions WHERE id=?", (sub_id,)
+            ).fetchone()
+            if not row:
+                return {"ok": False, "error": "not_found"}
+            owner = int(row["user_id"]) if hasattr(row, "keys") else int(row[0])
+            if owner != user_id:
+                return {"ok": False, "error": "not_owner"}
+            conn.execute("UPDATE match_subscriptions SET active=0 WHERE id=?", (sub_id,))
+            conn.commit()
+        return {"ok": True, "subscription_id": sub_id, "status": "deactivated"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 @app.get("/seller/balance")
