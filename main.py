@@ -276,6 +276,80 @@ def init_db():
             updated INTEGER NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_balance_coins ON user_balances(coins);
+
+        -- ===== ESCROW / DEALS / ВЫВОД СРЕДСТВ =====
+        -- Сделка между покупателем и продавцом, деньги в гаранте до подтверждения получения.
+        CREATE TABLE IF NOT EXISTS deals (
+            id TEXT PRIMARY KEY,
+            listing_id TEXT NOT NULL,
+            buyer_id BIGINT NOT NULL,
+            buyer_name TEXT,
+            buyer_username TEXT,
+            seller_id BIGINT NOT NULL,
+            seller_name TEXT,
+            seller_username TEXT,
+            amount_rub BIGINT NOT NULL,           -- цена сделки в рублях
+            amount_nano BIGINT,                    -- цена в TON (если оплата TON), иначе NULL
+            currency TEXT NOT NULL,                -- 'RUB' | 'TON'
+            payment_method TEXT NOT NULL,          -- 'tinkoff' | 'yukassa' | 'ton'
+            status TEXT NOT NULL DEFAULT 'awaiting_payment',
+                -- awaiting_payment → escrowed → shipped → released
+                --                  ↘ disputed → refunded / released (admin)
+                --                  ↘ cancelled (до оплаты)
+            shipping_address TEXT,
+            shipping_city TEXT,
+            tracking TEXT,
+            dispute_reason TEXT,
+            dispute_resolution TEXT,
+            escrow_tx_hash TEXT,                   -- tx хеш входящего TON платежа или label Тинькофф
+            payout_tx_hash TEXT,                   -- tx хеш исходящего TON продавцу при release
+            created INTEGER NOT NULL,
+            paid_at INTEGER,
+            shipped_at INTEGER,
+            confirmed_at INTEGER,
+            closed_at INTEGER,
+            auto_release_at INTEGER                 -- когда автоподтверждение (shipped + 5 дней)
+        );
+        CREATE INDEX IF NOT EXISTS idx_deals_buyer ON deals(buyer_id);
+        CREATE INDEX IF NOT EXISTS idx_deals_seller ON deals(seller_id);
+        CREATE INDEX IF NOT EXISTS idx_deals_status ON deals(status);
+        CREATE INDEX IF NOT EXISTS idx_deals_listing ON deals(listing_id);
+
+        -- Сообщения внутри сделки (чат покупатель ↔ продавец)
+        CREATE TABLE IF NOT EXISTS deal_messages (
+            id BIGSERIAL PRIMARY KEY,
+            deal_id TEXT NOT NULL,
+            from_user_id BIGINT NOT NULL,
+            text TEXT,
+            photo_url TEXT,
+            created INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_deal_messages_deal ON deal_messages(deal_id);
+
+        -- Балансы продавцов для вывода (₽ и TON отдельно)
+        CREATE TABLE IF NOT EXISTS seller_balances (
+            user_id BIGINT NOT NULL,
+            currency TEXT NOT NULL,                -- 'RUB' | 'TON'
+            amount BIGINT NOT NULL DEFAULT 0,      -- в копейках (RUB) или нанотонах (TON)
+            updated INTEGER NOT NULL,
+            PRIMARY KEY (user_id, currency)
+        );
+
+        -- Заявки на вывод средств продавцом
+        CREATE TABLE IF NOT EXISTS payouts (
+            id TEXT PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            currency TEXT NOT NULL,                -- 'RUB' | 'TON'
+            amount BIGINT NOT NULL,
+            destination TEXT NOT NULL,             -- карта/телефон для RUB или TON-адрес для TON
+            status TEXT NOT NULL DEFAULT 'pending',-- pending → completed | failed
+            tx_hash TEXT,
+            created INTEGER NOT NULL,
+            completed INTEGER,
+            note TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_payouts_user ON payouts(user_id);
+        CREATE INDEX IF NOT EXISTS idx_payouts_status ON payouts(status);
         """)
 
 
@@ -1801,13 +1875,38 @@ async def tinkoff_notify(request: Request):
     """
     body = await request.json()
     listing_id = body.get("listing_id", "")
+    deal_id = body.get("deal_id", "")
     user_id = int(body.get("user_id", 0) or 0)
     tier = body.get("tier", "")
 
-    if not listing_id:
-        return {"ok": False, "error": "no listing_id"}
     if not user_id:
         return {"ok": False, "error": "no user_id"}
+
+    # ESCROW DEAL FLOW
+    if deal_id:
+        with db_cursor() as conn:
+            row = conn.execute("SELECT * FROM deals WHERE id=?", (deal_id,)).fetchone()
+            if not row:
+                return {"ok": False, "error": "deal_not_found"}
+            d = _deal_row_to_dict(row)
+            if d["buyer_id"] != user_id:
+                return {"ok": False, "error": "not_buyer"}
+            if d["status"] not in ("awaiting_payment", "escrowed"):
+                return {"ok": False, "error": f"bad_status:{d['status']}"}
+            if d["status"] == "escrowed":
+                return {"ok": True, "status": "escrowed", "deal_id": deal_id,
+                        "instruction": "Деньги в гаранте. Продавец скоро отправит."}
+            conn.execute(
+                "UPDATE deals SET status='escrowed', paid_at=? WHERE id=?",
+                (int(time.time()), deal_id),
+            )
+            conn.commit()
+        logging.info(f"DEAL_ESCROWED deal={deal_id} user={user_id}")
+        return {"ok": True, "status": "escrowed", "deal_id": deal_id,
+                "instruction": "Деньги в гаранте. Продавец скоро отправит."}
+
+    if not listing_id:
+        return {"ok": False, "error": "no listing_id"}
 
     with db_cursor() as conn:
         row = conn.execute(
@@ -2142,7 +2241,10 @@ async def ton_verify_payment(request: Request):
             if not row:
                 return {"ok": False, "error": "payment intent not found"}
             if row.get("confirmed"):
-                # Already confirmed; idempotent re-activation.
+                # Already confirmed; idempotent.
+                # If deal, return escrowed state
+                if row["tier"] == "deal":
+                    return {"ok": True, "already_confirmed": True, "deal_id": listing_id, "status": "escrowed"}
                 return {"ok": True, "already_confirmed": True, "listing_id": listing_id}
             tier = row["tier"]
             amount_nano = int(row["amount_nano"])
@@ -2159,7 +2261,7 @@ async def ton_verify_payment(request: Request):
                 "error": "tx not found yet — wait 30s and tap Verify again",
             }
 
-        # Mark confirmed and activate listing.
+        # Mark confirmed.
         now = int(time.time())
         with db_cursor() as conn:
             conn.execute(
@@ -2167,6 +2269,27 @@ async def ton_verify_payment(request: Request):
                 "WHERE comment=?",
                 (now, tx_hash, now, user_id, comment),
             )
+
+            # ESCROW DEAL branch: tier='deal', listing_id is the deal_id
+            if tier == "deal":
+                deal_row = conn.execute(
+                    "SELECT * FROM deals WHERE id=? AND buyer_id=?",
+                    (listing_id, user_id),
+                ).fetchone()
+                if not deal_row:
+                    return {"ok": False, "error": "deal_not_found"}
+                if _deal_row_to_dict(deal_row)["status"] == "escrowed":
+                    return {"ok": True, "verified": True, "deal_id": listing_id, "status": "escrowed",
+                            "tx_hash": tx_hash, "already_confirmed": True}
+                conn.execute(
+                    "UPDATE deals SET status='escrowed', paid_at=?, escrow_tx_hash=? WHERE id=?",
+                    (now, tx_hash, listing_id),
+                )
+                conn.commit()
+                logging.info(f"DEAL_ESCROWED deal={listing_id} user={user_id} via=TON tx={tx_hash[:16]}")
+                return {"ok": True, "verified": True, "deal_id": listing_id, "status": "escrowed", "tx_hash": tx_hash}
+
+            # LISTING branch (regular paid listing)
             row = conn.execute(
                 "SELECT * FROM listings WHERE id=?", (listing_id,)
             ).fetchone()
@@ -2189,13 +2312,22 @@ async def ton_verify_payment(request: Request):
         # Notify user (Mini App polling will pick up status='paid' and show Activate button)
         try:
             if user_id and bot is not None:
-                text = (
-                    f"✅ <b>Оплата TON получена!</b>\n\n"
-                    f"Объявление <code>{listing_id}</code> ({tier.upper()}) готово к публикации.\n"
-                    f"💎 Списано: {TON_PRICES[tier]} TON\n"
-                    f"🔗 Tx: <code>{tx_hash[:16]}…</code>\n\n"
-                    f"Откройте Mini App и нажмите «Активировать объявление»."
-                )
+                if tier == "deal":
+                    text = (
+                        f"🛡 <b>Оплата TON получена!</b>\n\n"
+                        f"Сделка <code>{listing_id}</code> переведена в статус «в гаранте».\n"
+                        f"💎 Списано: {amount_nano / TON_NANOTON} TON\n"
+                        f"🔗 Tx: <code>{tx_hash[:16]}…</code>\n\n"
+                        f"Продавец скоро отправит товар. Следите за статусом в Mini App → «💼 Сделки»."
+                    )
+                else:
+                    text = (
+                        f"✅ <b>Оплата TON получена!</b>\n\n"
+                        f"Объявление <code>{listing_id}</code> ({tier.upper()}) готово к публикации.\n"
+                        f"💎 Списано: {TON_PRICES[tier]} TON\n"
+                        f"🔗 Tx: <code>{tx_hash[:16]}…</code>\n\n"
+                        f"Откройте Mini App и нажмите «Активировать объявление»."
+                    )
                 kb = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="📱 Открыть барахолку", web_app=WebAppInfo(url=WEBAPP_URL))]
                 ])
@@ -2203,6 +2335,14 @@ async def ton_verify_payment(request: Request):
         except Exception as e:
             print(f"TON verify notify error: {e}", flush=True)
 
+        if tier == "deal":
+            return {
+                "ok": True,
+                "verified": True,
+                "deal_id": listing_id,
+                "status": "escrowed",
+                "tx_hash": tx_hash,
+            }
         return {
             "ok": True,
             "verified": True,
@@ -2720,6 +2860,860 @@ async def payments_coins_pay(request: Request, user: Dict = Depends(get_user)):
         "status": "active",
         "posted": post_result is not None,
     }
+
+
+# ============================================================
+# ESCROW / DEALS — Гарант сделки
+# ============================================================
+# Сделка: покупатель платит → деньги в эскроу → продавец отправляет → покупатель подтверждает → release.
+# Статусы: awaiting_payment → escrowed → shipped → released
+#                                   ↘ disputed → (admin resolve) → released / refunded
+#                                   ↘ cancelled (до оплаты)
+#                                   ↘ refunded (если продавец не отправил за 3 дня)
+# Автоподтверждение: shipped + 5 дней без подтверждения покупателем → release автоматом.
+DEAL_AUTO_REFUND_DAYS = 3      # после escrowed, если продавец не ship → refund
+DEAL_AUTO_RELEASE_DAYS = 5     # после shipped, если покупатель не confirm → release
+
+
+def _deal_row_to_dict(row) -> Dict[str, Any]:
+    """Convert deals row → JSON-safe dict."""
+    def g(k, i):
+        return row.get(k) if isinstance(row, dict) else row[i]
+    return {
+        "id": g("id", 0),
+        "listing_id": g("listing_id", 1),
+        "buyer_id": int(g("buyer_id", 2) or 0),
+        "buyer_name": g("buyer_name", 3),
+        "buyer_username": g("buyer_username", 4),
+        "seller_id": int(g("seller_id", 5) or 0),
+        "seller_name": g("seller_name", 6),
+        "seller_username": g("seller_username", 7),
+        "amount_rub": int(g("amount_rub", 8) or 0),
+        "amount_nano": int(g("amount_nano", 9) or 0) if g("amount_nano", 9) else None,
+        "currency": g("currency", 10),
+        "payment_method": g("payment_method", 11),
+        "status": g("status", 12),
+        "shipping_address": g("shipping_address", 13),
+        "shipping_city": g("shipping_city", 14),
+        "tracking": g("tracking", 15),
+        "dispute_reason": g("dispute_reason", 16),
+        "dispute_resolution": g("dispute_resolution", 17),
+        "escrow_tx_hash": g("escrow_tx_hash", 18),
+        "payout_tx_hash": g("payout_tx_hash", 19),
+        "created": int(g("created", 20) or 0),
+        "paid_at": int(g("paid_at", 21) or 0) if g("paid_at", 21) else None,
+        "shipped_at": int(g("shipped_at", 22) or 0) if g("shipped_at", 22) else None,
+        "confirmed_at": int(g("confirmed_at", 23) or 0) if g("confirmed_at", 23) else None,
+        "closed_at": int(g("closed_at", 24) or 0) if g("closed_at", 24) else None,
+        "auto_release_at": int(g("auto_release_at", 25) or 0) if g("auto_release_at", 25) else None,
+    }
+
+
+def _deal_notify(bot, deal_row, event: str):
+    """Send Telegram notification to both buyer and seller about deal event."""
+    if not bot or not deal_row:
+        return
+    buyer_id = deal_row.get("buyer_id")
+    seller_id = deal_row.get("seller_id")
+    deal_id = deal_row.get("id")
+    title_text = {
+        "created": f"🛡 Сделка #{deal_id} создана. Оплатите в течение 24 часов.",
+        "paid": f"💰 Сделка #{deal_id} оплачена! Деньги в гаранте. Продавец скоро отправит товар.",
+        "shipped": f"📦 Продавец отправил ваш заказ по сделке #{deal_id}. Трек: {deal_row.get('tracking') or 'не указан'}",
+        "released": f"✅ Сделка #{deal_id} закрыта успешно! Спасибо за использование гаранта.",
+        "refunded": f"↩️ Сделка #{deal_id} отменена. Деньги возвращены покупателю.",
+        "disputed": f"⚠️ Открыт спор по сделке #{deal_id}. Админ свяжется с вами.",
+    }.get(event)
+    if not title_text:
+        return
+    kb = None
+    if event in ("paid", "shipped", "released"):
+        kb_url = f"{WEBAPP_URL}?startapp=deal_{deal_id}"
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📋 Открыть сделку", url=kb_url)],
+        ])
+    for uid in (buyer_id, seller_id):
+        if not uid:
+            continue
+        try:
+            asyncio.create_task(bot.send_message(int(uid), title_text, reply_markup=kb))
+        except Exception as e:
+            logging.warning(f"deal_notify failed for {uid}: {e}")
+
+
+async def _ton_transfer(to_address: str, amount_nano: int, comment: str = "") -> Optional[str]:
+    """Send TON from our escrow wallet to destination. Returns tx_hash or None.
+
+    NOTE: requires bot's wallet private key (TON_ESCROW_MNEMONIC env). For MVP this is a
+    placeholder — actual on-chain transfer would be done by admin bot command / bot wallet.
+    For now we mark the transfer as 'manual' and rely on admin to process payouts.
+    """
+    # Real implementation requires TON wallet SDK (ton-core / tonsdk) + signing key.
+    # For MVP we don't have private key in env — flag for manual admin payout.
+    logging.warning(
+        f"_ton_transfer requested: to={to_address} amount_nano={amount_nano} comment={comment!r} — manual mode"
+    )
+    return None  # tx_hash will be set later by admin via /admin/payouts/{id}/complete
+
+
+def _seller_balance_credit(conn, user_id: int, currency: str, amount: int) -> int:
+    """Add to seller balance (RUB=kopeyki, TON=nano). Returns new balance."""
+    now = int(time.time())
+    row = conn.execute(
+        "SELECT amount FROM seller_balances WHERE user_id=? AND currency=?",
+        (user_id, currency),
+    ).fetchone()
+    cur = int(row["amount"] if isinstance(row, dict) else row[0]) if row else 0
+    new_amount = cur + amount
+    if row:
+        conn.execute(
+            "UPDATE seller_balances SET amount=?, updated=? WHERE user_id=? AND currency=?",
+            (new_amount, now, user_id, currency),
+        )
+    else:
+        conn.execute(
+            "INSERT INTO seller_balances (user_id, currency, amount, updated) VALUES (?, ?, ?, ?)",
+            (user_id, currency, new_amount, now),
+        )
+    return new_amount
+
+
+def _deal_settle_release(conn, deal_row) -> Dict[str, Any]:
+    """Move deal to 'released' status: credit seller's balance + record payout.
+
+    For TON currency: trigger outgoing TON transfer (async).
+    For RUB currency: credit seller_balances (RUB) — admin pays out via /admin/payouts.
+    """
+    def g(k, i):
+        return deal_row.get(k) if isinstance(deal_row, dict) else deal_row[i]
+    deal_id = g("id", 0)
+    seller_id = int(g("seller_id", 5) or 0)
+    amount_rub = int(g("amount_rub", 8) or 0)
+    amount_nano = int(g("amount_nano", 9) or 0) if g("amount_nano", 9) else 0
+    currency = g("currency", 10)
+
+    now = int(time.time())
+    payout_tx = None
+    if currency == "TON" and amount_nano > 0:
+        # Mark as manual payout (no private key in env yet)
+        payout_tx = "manual_pending"
+        # Credit seller balance for tracking
+        _seller_balance_credit(conn, seller_id, "TON", amount_nano)
+    else:
+        # RUB: credit seller balance
+        _seller_balance_credit(conn, seller_id, "RUB", amount_rub * 100)  # store in kopeyki
+
+    conn.execute(
+        "UPDATE deals SET status='released', confirmed_at=?, closed_at=?, payout_tx_hash=? WHERE id=?",
+        (now, now, payout_tx, deal_id),
+    )
+    conn.commit()
+    return {"status": "released", "payout_tx_hash": payout_tx}
+
+
+@app.post("/deals/create")
+async def deals_create(request: Request, user: Dict = Depends(get_user)):
+    """Buyer initiates a deal: creates awaiting_payment row + returns payment details.
+
+    Body: {listing_id, payment_method: 'tinkoff'|'yukassa'|'ton', shipping_address, shipping_city}
+    Returns: deal info + payment instructions (link/wallet/comment).
+    """
+    try:
+        body = await request.json()
+        listing_id = (body.get("listing_id") or "").strip()
+        payment_method = (body.get("payment_method") or "").strip().lower()
+        shipping_address = (body.get("shipping_address") or "").strip()
+        shipping_city = (body.get("shipping_city") or "").strip()
+        if not listing_id:
+            return {"ok": False, "error": "listing_id required"}
+        if payment_method not in ("tinkoff", "yukassa", "ton"):
+            return {"ok": False, "error": "payment_method must be tinkoff|yukassa|ton"}
+        if not shipping_address:
+            return {"ok": False, "error": "shipping_address required"}
+    except Exception as e:
+        return {"ok": False, "error": f"bad_request: {e}"}
+
+    buyer_id = int(user["id"])
+    buyer_name = user.get("first_name") or "Покупатель"
+    buyer_username = user.get("username")
+
+    now = int(time.time())
+    deal_id = "D-" + _secrets.token_hex(4).upper()
+    out: Dict[str, Any] = {"ok": False}
+
+    with db_cursor() as conn:
+        row = conn.execute(
+            "SELECT id, user_id, user_name, user_username, title, price, status "
+            "FROM listings WHERE id=?",
+            (listing_id,),
+        ).fetchone()
+        if not row:
+            return {"ok": False, "error": "listing_not_found"}
+        title = row["title"] if isinstance(row, dict) else row[4]
+        seller_id = int(row["user_id"] if isinstance(row, dict) else row[1])
+        if seller_id == buyer_id:
+            return {"ok": False, "error": "cannot_deal_with_self"}
+        seller_name = (row["user_name"] if isinstance(row, dict) else row[2]) or "Продавец"
+        seller_username = (row["user_username"] if isinstance(row, dict) else row[3])
+        price_rub = int(row["price"] if isinstance(row, dict) else row[5])
+
+        # Calculate amount in TON (~rate: 1 TON ≈ 280 RUB for MVP, configurable later)
+        ton_rate_rub = 280
+        amount_nano = int(price_rub / ton_rate_rub * TON_NANOTON) if payment_method == "ton" else None
+        currency = "TON" if payment_method == "ton" else "RUB"
+
+        conn.execute(
+            "INSERT INTO deals (id, listing_id, buyer_id, buyer_name, buyer_username, "
+            "seller_id, seller_name, seller_username, amount_rub, amount_nano, currency, "
+            "payment_method, status, shipping_address, shipping_city, created) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'awaiting_payment', ?, ?, ?)",
+            (deal_id, listing_id, buyer_id, buyer_name, buyer_username,
+             seller_id, seller_name, seller_username, price_rub, amount_nano, currency,
+             payment_method, shipping_address, shipping_city, now),
+        )
+        conn.commit()
+
+        # Payment instructions
+        if payment_method == "ton":
+            # Use a unique comment so the on-chain transfer can be matched
+            nonce = _secrets.token_hex(4)
+            comment = f"deal_{deal_id}_{nonce}"
+            # Persist pending link so /payments/ton/verify can find this deal
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS ton_payments ("
+                "id BIGSERIAL PRIMARY KEY, listing_id TEXT, tier TEXT, "
+                "amount_nano BIGINT, comment TEXT NOT NULL UNIQUE, "
+                "tx_hash TEXT, user_id BIGINT, created INTEGER, confirmed INTEGER, tx_time INTEGER)"
+            )
+            conn.execute(
+                "INSERT INTO ton_payments (listing_id, tier, amount_nano, comment, created) "
+                "VALUES (?, 'deal', ?, ?, ?)",
+                (deal_id, amount_nano, comment, now),
+            )
+            conn.commit()
+            wallet = TON_WALLET_ADDRESS
+            if wallet.startswith("UQPLACEHOLDER"):
+                return {"ok": False, "error": "TON_WALLET_ADDRESS not configured"}
+            out = {
+                "ok": True,
+                "deal_id": deal_id,
+                "payment": {
+                    "method": "ton",
+                    "wallet": wallet,
+                    "amount_ton": amount_nano / TON_NANOTON,
+                    "amount_nano": amount_nano,
+                    "comment": comment,
+                    "instructions": (
+                        f"Отправьте ровно {amount_nano / TON_NANOTON} TON на {wallet} "
+                        f"с комментарием {comment!r}. Деньги попадут в гарант."
+                    ),
+                },
+                "amount_rub": price_rub,
+                "currency": currency,
+            }
+        elif payment_method == "tinkoff":
+            # Generate tinkoff quick-pay link with deal_id in label so /payments/tinkoff/notify can route
+            pay_url = (
+                f"https://www.tbank.ru/rm/r_TGugYbYVEb.mLmrPUwlTy"
+                f"?amount={price_rub * 100}&label=deal-{deal_id}"
+                f"&successURL=https://t.me/Ibaraholka_bot"
+            )
+            out = {
+                "ok": True,
+                "deal_id": deal_id,
+                "payment": {
+                    "method": "tinkoff",
+                    "url": pay_url,
+                    "amount_rub": price_rub,
+                    "instructions": (
+                        f"Оплатите {price_rub} ₽ по ссылке. В комментарии перевода ничего указывать "
+                        f"не нужно — мы свяжем платёж со сделкой #{deal_id} автоматически."
+                    ),
+                },
+                "amount_rub": price_rub,
+                "currency": currency,
+            }
+        else:  # yukassa
+            # Return YooMoney-style quickpay (fallback; ЮMoney quickpay is dead — use tinkoff link)
+            return {
+                "ok": False,
+                "error": "yukassa_unavailable",
+                "message": "Оплата через ЮMoney временно недоступна. Выберите Тинькофф или TON.",
+            }
+
+        # Fire-and-forget Telegram notification to seller
+        if bot is not None:
+            try:
+                kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="📋 Открыть сделку", url=f"{WEBAPP_URL}?startapp=deal_{deal_id}")],
+                ])
+                asyncio.create_task(bot.send_message(
+                    seller_id,
+                    f"🛡 Новая сделка #{deal_id}!\n"
+                    f"Покупатель: {buyer_name} (@{buyer_username or '—'})\n"
+                    f"Товар: {title}\n"
+                    f"Сумма: {price_rub} ₽\n"
+                    f"Доставка: {shipping_city}, {shipping_address[:60]}",
+                    reply_markup=kb,
+                ))
+            except Exception as e:
+                logging.warning(f"seller notify failed: {e}")
+    return out
+
+
+@app.post("/deals/{deal_id}/ship")
+async def deals_ship(deal_id: str, request: Request, user: Dict = Depends(get_user)):
+    """Seller marks deal as shipped. Sets tracking, status=shipped, shipped_at=now."""
+    user_id = int(user["id"])
+    try:
+        body = await request.json()
+        tracking = (body.get("tracking") or "").strip()
+    except Exception:
+        tracking = ""
+    now = int(time.time())
+
+    with db_cursor() as conn:
+        row = conn.execute("SELECT * FROM deals WHERE id=?", (deal_id,)).fetchone()
+        if not row:
+            return {"ok": False, "error": "deal_not_found"}
+        d = _deal_row_to_dict(row)
+        if d["seller_id"] != user_id:
+            return {"ok": False, "error": "not_seller"}
+        if d["status"] != "escrowed":
+            return {"ok": False, "error": f"invalid_status:{d['status']}"}
+        conn.execute(
+            "UPDATE deals SET status='shipped', tracking=?, shipped_at=?, "
+            "auto_release_at=? WHERE id=?",
+            (tracking or None, now, now + DEAL_AUTO_RELEASE_DAYS * 86400, deal_id),
+        )
+        conn.commit()
+
+    # Notify buyer
+    if bot is not None:
+        try:
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📋 Открыть сделку", url=f"{WEBAPP_URL}?startapp=deal_{deal_id}")],
+            ])
+            asyncio.create_task(bot.send_message(
+                d["buyer_id"],
+                f"📦 Продавец отправил ваш заказ по сделке #{deal_id}!\n"
+                f"Трек: {tracking or 'не указан'}\n"
+                f"Когда получите — откройте сделку и нажмите «Подтвердить получение».",
+                reply_markup=kb,
+            ))
+        except Exception as e:
+            logging.warning(f"buyer ship notify failed: {e}")
+
+    return {"ok": True, "deal_id": deal_id, "status": "shipped", "tracking": tracking}
+
+
+@app.post("/deals/{deal_id}/confirm")
+async def deals_confirm(deal_id: str, user: Dict = Depends(get_user)):
+    """Buyer confirms receipt → release funds to seller."""
+    user_id = int(user["id"])
+    now = int(time.time())
+
+    with db_cursor() as conn:
+        row = conn.execute("SELECT * FROM deals WHERE id=?", (deal_id,)).fetchone()
+        if not row:
+            return {"ok": False, "error": "deal_not_found"}
+        d = _deal_row_to_dict(row)
+        if d["buyer_id"] != user_id:
+            return {"ok": False, "error": "not_buyer"}
+        if d["status"] not in ("shipped", "escrowed"):
+            return {"ok": False, "error": f"invalid_status:{d['status']}"}
+        result = _deal_settle_release(conn, d)
+
+    # Notify seller
+    if bot is not None:
+        try:
+            amount_text = f"{d['amount_rub']} ₽" if d["currency"] == "RUB" else f"{d['amount_nano'] / TON_NANOTON} TON"
+            asyncio.create_task(bot.send_message(
+                d["seller_id"],
+                f"✅ Сделка #{deal_id} закрыта!\n"
+                f"Покупатель подтвердил получение.\n"
+                f"Вам зачислено: {amount_text}\n"
+                f"Запросите вывод из раздела «Мои сделки» → «Баланс».",
+            ))
+        except Exception as e:
+            logging.warning(f"seller confirm notify failed: {e}")
+
+    return {"ok": True, "deal_id": deal_id, **result}
+
+
+@app.post("/deals/{deal_id}/dispute")
+async def deals_dispute(deal_id: str, request: Request, user: Dict = Depends(get_user)):
+    """Buyer or seller opens a dispute. Notifies admin."""
+    user_id = int(user["id"])
+    try:
+        body = await request.json()
+        reason = (body.get("reason") or "").strip()
+    except Exception:
+        reason = ""
+    if not reason:
+        return {"ok": False, "error": "reason required"}
+    now = int(time.time())
+
+    with db_cursor() as conn:
+        row = conn.execute("SELECT * FROM deals WHERE id=?", (deal_id,)).fetchone()
+        if not row:
+            return {"ok": False, "error": "deal_not_found"}
+        d = _deal_row_to_dict(row)
+        if user_id not in (d["buyer_id"], d["seller_id"]):
+            return {"ok": False, "error": "not_party"}
+        if d["status"] not in ("escrowed", "shipped"):
+            return {"ok": False, "error": f"cannot_dispute_in:{d['status']}"}
+        conn.execute(
+            "UPDATE deals SET status='disputed', dispute_reason=?, closed_at=NULL WHERE id=?",
+            (reason, deal_id),
+        )
+        conn.commit()
+
+    # Notify admin
+    if bot is not None:
+        try:
+            for admin_id in ADMIN_IDS:
+                asyncio.create_task(bot.send_message(
+                    int(admin_id),
+                    f"⚠️ СПОР по сделке #{deal_id}!\n"
+                    f"Покупатель: {d['buyer_name']} (@{d['buyer_username'] or '—'})\n"
+                    f"Продавец: {d['seller_name']} (@{d['seller_username'] or '—'})\n"
+                    f"Сумма: {d['amount_rub']} ₽\n"
+                    f"Причина: {reason[:300]}",
+                ))
+        except Exception as e:
+            logging.warning(f"admin dispute notify failed: {e}")
+
+    return {"ok": True, "deal_id": deal_id, "status": "disputed"}
+
+
+@app.post("/deals/{deal_id}/cancel")
+async def deals_cancel(deal_id: str, user: Dict = Depends(get_user)):
+    """Cancel deal before payment (awaiting_payment status)."""
+    user_id = int(user["id"])
+    with db_cursor() as conn:
+        row = conn.execute("SELECT * FROM deals WHERE id=?", (deal_id,)).fetchone()
+        if not row:
+            return {"ok": False, "error": "deal_not_found"}
+        d = _deal_row_to_dict(row)
+        if d["buyer_id"] != user_id:
+            return {"ok": False, "error": "not_buyer"}
+        if d["status"] != "awaiting_payment":
+            return {"ok": False, "error": f"cannot_cancel_in:{d['status']}"}
+        conn.execute("UPDATE deals SET status='cancelled', closed_at=? WHERE id=?",
+                     (int(time.time()), deal_id))
+        conn.commit()
+    return {"ok": True, "deal_id": deal_id, "status": "cancelled"}
+
+
+@app.post("/deals/{deal_id}/messages")
+async def deals_post_message(deal_id: str, request: Request, user: Dict = Depends(get_user)):
+    """Post a message in the deal's chat (buyer ↔ seller)."""
+    user_id = int(user["id"])
+    try:
+        body = await request.json()
+        text = (body.get("text") or "").strip()
+        photo_url = (body.get("photo_url") or "").strip()
+    except Exception:
+        text, photo_url = "", ""
+    if not text and not photo_url:
+        return {"ok": False, "error": "text or photo_url required"}
+
+    now = int(time.time())
+    with db_cursor() as conn:
+        row = conn.execute("SELECT * FROM deals WHERE id=?", (deal_id,)).fetchone()
+        if not row:
+            return {"ok": False, "error": "deal_not_found"}
+        d = _deal_row_to_dict(row)
+        if user_id not in (d["buyer_id"], d["seller_id"]):
+            return {"ok": False, "error": "not_party"}
+        conn.execute(
+            "INSERT INTO deal_messages (deal_id, from_user_id, text, photo_url, created) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (deal_id, user_id, text or None, photo_url or None, now),
+        )
+        conn.commit()
+    return {"ok": True, "deal_id": deal_id}
+
+
+@app.get("/deals/{deal_id}/messages")
+async def deals_get_messages(deal_id: str, user: Dict = Depends(get_user)):
+    """Get chat messages for a deal (buyer or seller)."""
+    user_id = int(user["id"])
+    with db_cursor() as conn:
+        row = conn.execute("SELECT buyer_id, seller_id FROM deals WHERE id=?", (deal_id,)).fetchone()
+        if not row:
+            return {"ok": False, "error": "deal_not_found"}
+        buyer_id = int(row["buyer_id"] if isinstance(row, dict) else row[0])
+        seller_id = int(row["seller_id"] if isinstance(row, dict) else row[1])
+        if user_id not in (buyer_id, seller_id):
+            return {"ok": False, "error": "not_party"}
+        msgs = conn.execute(
+            "SELECT id, from_user_id, text, photo_url, created FROM deal_messages "
+            "WHERE deal_id=? ORDER BY created ASC LIMIT 100",
+            (deal_id,),
+        ).fetchall()
+        out = []
+        for m in msgs:
+            d = m if isinstance(m, dict) else None
+            out.append({
+                "id": (d["id"] if d else m[0]),
+                "from_user_id": int(d["from_user_id"] if d else m[1]),
+                "text": (d["text"] if d else m[2]),
+                "photo_url": (d["photo_url"] if d else m[3]),
+                "created": int(d["created"] if d else m[4]),
+            })
+    return {"ok": True, "deal_id": deal_id, "messages": out}
+
+
+@app.get("/deals/{deal_id}")
+async def deals_get(deal_id: str, user: Dict = Depends(get_user)):
+    """Get deal details. Buyer, seller, or admin can view."""
+    user_id = int(user["id"])
+    is_admin = user_id in [int(a) for a in ADMIN_IDS]
+    with db_cursor() as conn:
+        row = conn.execute("SELECT * FROM deals WHERE id=?", (deal_id,)).fetchone()
+        if not row:
+            return {"ok": False, "error": "deal_not_found"}
+        d = _deal_row_to_dict(row)
+        if not is_admin and user_id not in (d["buyer_id"], d["seller_id"]):
+            return {"ok": False, "error": "forbidden"}
+    return {"ok": True, "deal": d}
+
+
+@app.get("/deals")
+async def deals_list(request: Request, user: Dict = Depends(get_user)):
+    """List deals for current user. ?role=buyer|seller (default both)."""
+    user_id = int(user["id"])
+    role = request.query_params.get("role", "all")
+    with db_cursor() as conn:
+        if role == "buyer":
+            rows = conn.execute(
+                "SELECT * FROM deals WHERE buyer_id=? ORDER BY created DESC LIMIT 50",
+                (user_id,),
+            ).fetchall()
+        elif role == "seller":
+            rows = conn.execute(
+                "SELECT * FROM deals WHERE seller_id=? ORDER BY created DESC LIMIT 50",
+                (user_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM deals WHERE buyer_id=? OR seller_id=? "
+                "ORDER BY created DESC LIMIT 50",
+                (user_id, user_id),
+            ).fetchall()
+    return {"ok": True, "deals": [_deal_row_to_dict(r) for r in rows]}
+
+
+@app.post("/payouts/request")
+async def payouts_request(request: Request, user: Dict = Depends(get_user)):
+    """Seller requests payout of balance."""
+    try:
+        body = await request.json()
+        currency = (body.get("currency") or "RUB").upper()
+        amount = int(body.get("amount") or 0)
+        destination = (body.get("destination") or "").strip()
+    except Exception as e:
+        return {"ok": False, "error": f"bad_request: {e}"}
+    if currency not in ("RUB", "TON"):
+        return {"ok": False, "error": "currency must be RUB or TON"}
+    if amount <= 0:
+        return {"ok": False, "error": "amount must be > 0"}
+    if not destination:
+        return {"ok": False, "error": "destination required"}
+
+    user_id = int(user["id"])
+    payout_id = "P-" + _secrets.token_hex(4).upper()
+    now = int(time.time())
+
+    with db_cursor() as conn:
+        row = conn.execute(
+            "SELECT amount FROM seller_balances WHERE user_id=? AND currency=?",
+            (user_id, currency),
+        ).fetchone()
+        cur = int(row["amount"] if isinstance(row, dict) else row[0]) if row else 0
+        if cur < amount:
+            return {"ok": False, "error": "insufficient_balance", "have": cur, "requested": amount}
+
+        # Deduct balance, create payout
+        conn.execute(
+            "UPDATE seller_balances SET amount=?, updated=? WHERE user_id=? AND currency=?",
+            (cur - amount, now, user_id, currency),
+        )
+        conn.execute(
+            "INSERT INTO payouts (id, user_id, currency, amount, destination, status, created) "
+            "VALUES (?, ?, ?, ?, ?, 'pending', ?)",
+            (payout_id, user_id, currency, amount, destination, now),
+        )
+        conn.commit()
+
+    # Notify admin
+    if bot is not None:
+        try:
+            for admin_id in ADMIN_IDS:
+                asyncio.create_task(bot.send_message(
+                    int(admin_id),
+                    f"💸 Заявка на вывод #{payout_id}\n"
+                    f"User: {user_id}\n"
+                    f"Сумма: {amount} {currency}\n"
+                    f"Куда: {destination}",
+                ))
+        except Exception as e:
+            logging.warning(f"admin payout notify failed: {e}")
+
+    return {"ok": True, "payout_id": payout_id, "status": "pending"}
+
+
+@app.get("/seller/balance")
+async def seller_balance_get(user: Dict = Depends(get_user)):
+    """Get current seller's balance (RUB + TON)."""
+    user_id = int(user["id"])
+    with db_cursor() as conn:
+        rows = conn.execute(
+            "SELECT currency, amount FROM seller_balances WHERE user_id=?",
+            (user_id,),
+        ).fetchall()
+        rub = 0
+        ton = 0
+        for r in rows:
+            d = r if isinstance(r, dict) else None
+            cur = (d["currency"] if d else r[0])
+            amt = int(d["amount"] if d else r[1])
+            if cur == "RUB":
+                rub = amt
+            elif cur == "TON":
+                ton = amt
+    return {"ok": True, "rub_kopeyki": rub, "rub": rub / 100, "ton_nano": ton, "ton": ton / TON_NANOTON}
+
+
+@app.post("/admin/deals/{deal_id}/resolve")
+async def admin_deals_resolve(deal_id: str, request: Request, x_admin_token: str = Header(None, alias="x-admin-token")):
+    """Admin resolves a disputed deal: released (seller wins) or refunded (buyer wins)."""
+    if x_admin_token != ADMIN_TOKEN:
+        raise HTTPException(403, "Admin token required")
+    try:
+        body = await request.json()
+        outcome = (body.get("outcome") or "").strip()  # 'release' or 'refund'
+        note = (body.get("note") or "").strip()
+    except Exception:
+        outcome, note = "", ""
+    if outcome not in ("release", "refund"):
+        return {"ok": False, "error": "outcome must be release|refund"}
+
+    now = int(time.time())
+    with db_cursor() as conn:
+        row = conn.execute("SELECT * FROM deals WHERE id=?", (deal_id,)).fetchone()
+        if not row:
+            return {"ok": False, "error": "deal_not_found"}
+        d = _deal_row_to_dict(row)
+        if d["status"] != "disputed":
+            return {"ok": False, "error": f"not_disputed:{d['status']}"}
+        if outcome == "release":
+            result = _deal_settle_release(conn, d)
+            conn.execute(
+                "UPDATE deals SET dispute_resolution=? WHERE id=?",
+                (f"RELEASED: {note}" if note else "RELEASED", deal_id),
+            )
+        else:
+            # Refund: credit buyer (for now just log — admin handles actual refund manually)
+            conn.execute(
+                "UPDATE deals SET status='refunded', closed_at=?, dispute_resolution=? WHERE id=?",
+                (now, f"REFUNDED: {note}" if note else "REFUNDED", deal_id),
+            )
+            conn.commit()
+            result = {"status": "refunded"}
+
+    # Notify both parties
+    if bot is not None:
+        try:
+            text = (
+                f"✅ Спор по сделке #{deal_id} решён в пользу продавца. Деньги зачислены."
+                if outcome == "release"
+                else f"↩️ Спор по сделке #{deal_id} решён в пользу покупателя. Деньги возвращены."
+            )
+            for uid in (d["buyer_id"], d["seller_id"]):
+                asyncio.create_task(bot.send_message(int(uid), text))
+        except Exception as e:
+            logging.warning(f"deal resolve notify failed: {e}")
+
+    return {"ok": True, "deal_id": deal_id, **result}
+
+
+@app.get("/admin/deals")
+async def admin_deals_list(request: Request, status: str = "disputed",
+                            x_admin_token: str = Header(None, alias="x-admin-token")):
+    """Admin: list deals (optionally filter by status)."""
+    if x_admin_token != ADMIN_TOKEN:
+        raise HTTPException(403, "Admin token required")
+    with db_cursor() as conn:
+        if status == "all":
+            rows = conn.execute(
+                "SELECT * FROM deals ORDER BY created DESC LIMIT 100"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM deals WHERE status=? ORDER BY created DESC LIMIT 100",
+                (status,),
+            ).fetchall()
+    return {"ok": True, "deals": [_deal_row_to_dict(r) for r in rows]}
+
+
+@app.get("/admin/payouts")
+async def admin_payouts_list(x_admin_token: str = Header(None, alias="x-admin-token"),
+                              status: str = "pending"):
+    """Admin: list payout requests."""
+    if x_admin_token != ADMIN_TOKEN:
+        raise HTTPException(403, "Admin token required")
+    with db_cursor() as conn:
+        rows = conn.execute(
+            "SELECT id, user_id, currency, amount, destination, status, tx_hash, created, completed, note "
+            "FROM payouts WHERE (?='all' OR status=?) ORDER BY created DESC LIMIT 100",
+            (status, status),
+        ).fetchall()
+        out = []
+        for r in rows:
+            d = r if isinstance(r, dict) else None
+            out.append({
+                "id": (d["id"] if d else r[0]),
+                "user_id": int(d["user_id"] if d else r[1]),
+                "currency": (d["currency"] if d else r[2]),
+                "amount": int(d["amount"] if d else r[3]),
+                "destination": (d["destination"] if d else r[4]),
+                "status": (d["status"] if d else r[5]),
+                "tx_hash": (d["tx_hash"] if d else r[6]),
+                "created": int(d["created"] if d else r[7]),
+                "completed": int(d["completed"] if d else r[8]) if (d["completed"] if d else r[8]) else None,
+                "note": (d["note"] if d else r[9]),
+            })
+    return {"ok": True, "payouts": out}
+
+
+@app.post("/admin/payouts/{payout_id}/complete")
+async def admin_payouts_complete(payout_id: str, request: Request,
+                                  x_admin_token: str = Header(None, alias="x-admin-token")):
+    """Admin marks payout as completed and attaches tx_hash / external transfer ref."""
+    if x_admin_token != ADMIN_TOKEN:
+        raise HTTPException(403, "Admin token required")
+    try:
+        body = await request.json()
+        tx_hash = (body.get("tx_hash") or "").strip()
+        note = (body.get("note") or "").strip()
+    except Exception:
+        tx_hash, note = "", ""
+    if not tx_hash and not note:
+        return {"ok": False, "error": "tx_hash or note required"}
+    now = int(time.time())
+    with db_cursor() as conn:
+        row = conn.execute("SELECT user_id, currency, amount FROM payouts WHERE id=?",
+                          (payout_id,)).fetchone()
+        if not row:
+            return {"ok": False, "error": "payout_not_found"}
+        d = row if isinstance(row, dict) else None
+        user_id = int(d["user_id"] if d else row[0])
+        conn.execute(
+            "UPDATE payouts SET status='completed', completed=?, tx_hash=?, note=? WHERE id=?",
+            (now, tx_hash or None, note or None, payout_id),
+        )
+        conn.commit()
+    # Notify seller
+    if bot is not None:
+        try:
+            asyncio.create_task(bot.send_message(
+                user_id,
+                f"✅ Выплата #{payout_id} выполнена админом. {note or ''}",
+            ))
+        except Exception as e:
+            logging.warning(f"payout notify failed: {e}")
+    return {"ok": True, "payout_id": payout_id, "status": "completed"}
+
+
+# ============================================================
+# DEALS CRON — auto-refund + auto-release
+# ============================================================
+async def deals_auto_settle():
+    """Run periodically: auto-refund stuck escrowed deals, auto-release overdue shipped deals."""
+    try:
+        now = int(time.time())
+        settled = []
+        with db_cursor() as conn:
+            # 1. escrowed + created > 3 days ago + still no ship → refund
+            stuck = conn.execute(
+                "SELECT * FROM deals WHERE status='escrowed' AND created < ?",
+                (now - DEAL_AUTO_REFUND_DAYS * 86400,),
+            ).fetchall()
+            for r in stuck:
+                d = _deal_row_to_dict(r)
+                conn.execute(
+                    "UPDATE deals SET status='refunded', closed_at=?, "
+                    "dispute_resolution=? WHERE id=?",
+                    (now, "AUTO_REFUND: seller didn't ship in 3 days", d["id"]),
+                )
+                settled.append({"deal_id": d["id"], "action": "auto_refund"})
+
+            # 2. shipped + auto_release_at passed → release
+            overdue = conn.execute(
+                "SELECT * FROM deals WHERE status='shipped' AND auto_release_at IS NOT NULL "
+                "AND auto_release_at < ?",
+                (now,),
+            ).fetchall()
+            for r in overdue:
+                d = _deal_row_to_dict(r)
+                _deal_settle_release(conn, d)
+                conn.execute(
+                    "UPDATE deals SET dispute_resolution=? WHERE id=?",
+                    ("AUTO_RELEASE: buyer didn't confirm in 5 days", d["id"]),
+                )
+                settled.append({"deal_id": d["id"], "action": "auto_release"})
+
+            if settled:
+                conn.commit()
+        if settled:
+            logging.info(f"deals_auto_settle: {settled}")
+            # Notify bot parties
+            for s in settled:
+                row = None
+                with db_cursor() as conn:
+                    row = conn.execute("SELECT * FROM deals WHERE id=?", (s["deal_id"],)).fetchone()
+                if not row:
+                    continue
+                d = _deal_row_to_dict(row)
+                if bot is not None:
+                    try:
+                        if s["action"] == "auto_refund":
+                            for uid in (d["buyer_id"], d["seller_id"]):
+                                asyncio.create_task(bot.send_message(int(uid),
+                                    f"↩️ Сделка #{s['deal_id']} авто-возврат: продавец не отправил за 3 дня."))
+                        else:
+                            for uid in (d["buyer_id"], d["seller_id"]):
+                                asyncio.create_task(bot.send_message(int(uid),
+                                    f"✅ Сделка #{s['deal_id']} авто-подтверждена через 5 дней после отправки."))
+                    except Exception as e:
+                        logging.warning(f"auto_settle notify failed: {e}")
+    except Exception as e:
+        logging.error(f"deals_auto_settle error: {e}")
+
+
+# ============================================================
+# Background scheduler: deals_auto_settle + keepalive
+# ============================================================
+async def _background_scheduler():
+    """Run periodic tasks while the app is alive."""
+    import asyncio
+    while True:
+        try:
+            await asyncio.sleep(6 * 3600)  # every 6 hours
+            await deals_auto_settle()
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logging.error(f"background_scheduler error: {e}")
+
+
+@app.on_event("startup")
+async def _start_background():
+    import asyncio
+    asyncio.create_task(_background_scheduler())
 
 
 @app.get("/admin/ads")
