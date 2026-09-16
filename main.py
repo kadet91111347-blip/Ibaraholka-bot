@@ -1264,10 +1264,21 @@ def debug_state():
 def list_listings(
     cat: Optional[str] = Query(None, pattern="^(iphone|airpods|ipad|mac|watch|accs)$"),
     type: Optional[str] = Query(None, pattern="^(sell|buy|exchange|opt)$"),
+    since: Optional[str] = Query(None, pattern="^(1h|24h|7d)$"),
     limit: int = Query(100, ge=1, le=500),
 ):
-    """Public list of active listings (sorted by tier then recency)."""
+    """Public list of active listings (sorted by tier then recency).
+
+    Query params:
+      cat — filter by category
+      type — sell/buy/exchange/opt
+      since — 1h | 24h | 7d (filter by created timestamp)
+      limit — max results (default 100)
+    """
     now = int(datetime.now().timestamp())
+    since_seconds = {"1h": 3600, "24h": 86400, "7d": 7 * 86400}.get(since, 0)
+    since_ts = now - since_seconds if since_seconds else None
+
     with db_cursor() as conn:
         q = (
             "SELECT id, user_id, user_name, user_username, title, description, price, cat, type, "
@@ -1282,13 +1293,30 @@ def list_listings(
         if type:
             q += " AND type=?"
             params.append(type)
+        if since_ts is not None:
+            q += " AND created>=?"
+            params.append(since_ts)
         q += (
             " ORDER BY CASE tier WHEN 'vip' THEN 0 WHEN 'premium' THEN 1 ELSE 2 END, "
             "created DESC LIMIT ?"
         )
         params.append(limit)
         rows = conn.execute(q, params).fetchall()
-        return [dict(r) for r in rows]
+
+        # Build ETag from row count + max created (cheap and stable for our poll cadence)
+        row_count = len(rows)
+        max_created = max((r["created"] or 0) for r in rows) if rows else 0
+        etag = f'W/"r{row_count}-m{max_created}-c{cat or "x"}-s{since or "x"}-t{type or "x"}-l{limit}"'
+
+        from fastapi import Response
+        resp = Response(
+            content=json.dumps([dict(r) for r in rows], ensure_ascii=False, default=str),
+            media_type="application/json",
+        )
+        resp.headers["Cache-Control"] = "public, max-age=10"
+        resp.headers["ETag"] = etag
+        resp.headers["X-Result-Count"] = str(row_count)
+        return resp
 
 
 @app.post("/listings")
