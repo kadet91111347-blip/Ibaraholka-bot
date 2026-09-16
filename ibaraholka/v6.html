@@ -316,8 +316,12 @@
           '<div style="font-size:10px;color:#9A9AA8;margin-bottom:12px;text-align:center;font-family:monospace">' + esc(result.id) + '</div>' +
           '<button type="button" class="pay-btn" style="background:linear-gradient(135deg,#FFD700,#FF8A4C);color:#0B0B0F" onclick="window.__payStars && window.__payStars(\'' + esc(result.id) + '\')">⭐ Оплатить Telegram Stars</button>' +
           '<div style="text-align:center;margin:10px 0 6px;color:rgba(255,255,255,0.4);font-size:11px">— или картой через Тинькофф —</div>' +
-          '<a class="pay-btn" style="background:linear-gradient(135deg,#FFDD2D,#FFCC00);color:#0B0B0F;text-decoration:none;display:flex;align-items:center;justify-content:center;font-weight:800" href="https://www.tbank.ru/rm/r_TGugYbYVEb.mLmrPUwlTy/aHI4Y75190" target="_blank" rel="noopener noreferrer">💳 Оплатить через Тинькофф</a>' +
-          '<div style="font-size:9px;color:#9A9AA8;text-align:center;margin-bottom:8px">Сумма: <b>' + rub + ' ₽</b></div>' +
+          '<div id="miniTinkoffBlock">' +
+            '<a class="pay-btn" id="miniTinkoffPayLink" style="background:linear-gradient(135deg,#FFDD2D,#FFCC00);color:#0B0B0F;text-decoration:none;display:flex;align-items:center;justify-content:center;font-weight:800;font-weight:800" href="https://www.tbank.ru/rm/r_TGugYbYVEb.mLmrPUwlTy/aHI4Y75190">💳 Открыть оплату в Тинькофф</a>' +
+            '<div style="font-size:9px;color:#9A9AA8;text-align:center;margin-bottom:8px">Сумма: <b>' + rub + ' ₽</b> · после оплаты вернись сюда и нажми кнопку ниже</div>' +
+            '<button type="button" class="pay-btn" id="miniTinkoffConfirm" style="background:#22C55E;color:#0B0B0F;font-weight:800">✅ Я оплатил — активировать</button>' +
+            '<div id="miniTinkoffStatus" style="font-size:10px;color:#9A9AA8;text-align:center;margin-top:6px;min-height:14px"></div>' +
+          '</div>' +
           '<div style="text-align:center;margin:10px 0 6px;color:rgba(255,255,255,0.4);font-size:11px">— или криптой TON —</div>' +
           '<button type="button" class="pay-btn" id="miniTonBtn" data-lid="' + esc(result.id) + '" data-tier="' + esc(item.tier) + '" style="background:linear-gradient(135deg,#0098EA,#3DDC97);color:#fff">💎 Оплатить TON</button>' +
           '<div id="miniTonPanel" style="display:none;margin-top:10px;padding:12px;background:rgba(0,152,234,.1);border:1px solid rgba(0,152,234,.35);border-radius:12px;font-size:12px;line-height:1.5">' +
@@ -330,9 +334,9 @@
             '<div id="miniTonStatus" style="font-size:10px;color:#9A9AA8;margin-top:6px;min-height:14px"></div>' +
           '</div>' +
           '<div class="pay-info">' +
-            '⭐ <b>Stars</b> — оплата внутри Telegram без закрытия WebApp.<br>' +
-            '💳 <b>Тинькофф</b> — оплата картой через банк.<br>' +
-            '💎 <b>TON</b> — перевод из Tonkeeper/MyTonWallet, проверка в блокчейне.' +
+            '⭐ <b>Stars</b> — мгновенная активация внутри Telegram.<br>' +
+            '💳 <b>Тинькофф</b> — после оплаты нажми «✅ Я оплатил», объявление активируется автоматически.<br>' +
+            '💎 <b>TON</b> — перевод из Tonkeeper, проверка в блокчейне.' +
           '</div>' +
           '<button type="button" class="pay-close" onclick="window.__payClose && window.__payClose(true)">Закрыть</button>' +
         '</div>';
@@ -340,6 +344,59 @@
     document.body.appendChild(div);
     // === Wire TON inline mini-modal (only when tier is paid) ===
     if (!isFree) {
+      // Wire Tinkoff confirm button
+      var tConf = document.getElementById('miniTinkoffConfirm');
+      var tStat = document.getElementById('miniTinkoffStatus');
+      if (tConf) {
+        // Tinkoff payment link — open via Telegram.WebApp.openLink for mobile reliability
+        var tPayLink = document.getElementById('miniTinkoffPayLink');
+        if (tPayLink) {
+          tPayLink.onclick = function(ev) {
+            ev.preventDefault();
+            openExternal('https://www.tbank.ru/rm/r_TGugYbYVEb.mLmrPUwlTy/aHI4Y75190', 'Tinkoff');
+            tStat.style.color = '#FFD700';
+            tStat.textContent = 'После оплаты в Тинькофф вернись сюда и нажми «Я оплатил»';
+            // Start polling so ЮKassa webhook / Stars success also shows success
+            pollUntilActive(result.id, 'Tinkoff/ЮKassa');
+            return false;
+          };
+        }
+        tConf.onclick = async function() {
+          tConf.disabled = true;
+          tConf.textContent = '⏳ Активирую…';
+          tStat.style.color = '#FFD700';
+          tStat.textContent = 'Отправляю запрос…';
+          try {
+            var tgUser = (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initDataUnsafe && window.Telegram.WebApp.initDataUnsafe.user) || null;
+            var uid = tgUser ? tgUser.id : 0;
+            var r = await fetch(API + '/payments/tinkoff/notify', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({listing_id: result.id, tier: item.tier, user_id: uid})
+            });
+            var data = await r.json();
+            if (data.ok) {
+              tStat.style.color = '#3DDC97';
+              tStat.innerHTML = '✅ Активировано! Открывается зелёное окно…';
+              tConf.textContent = '✓ Готово';
+              setTimeout(function() {
+                showPaymentSuccess(result.id, {tier: item.tier, channel_message_id: data.channel_message_id, is_active: true}, 'Тинькофф');
+              }, 400);
+            } else {
+              tStat.style.color = '#FF6B6B';
+              tStat.textContent = '⚠️ ' + (data.error || 'ошибка');
+              tConf.disabled = false;
+              tConf.textContent = '✅ Я оплатил — активировать';
+            }
+          } catch (e) {
+            tStat.style.color = '#FF6B6B';
+            tStat.textContent = '⚠️ ' + e.message;
+            tConf.disabled = false;
+            tConf.textContent = '✅ Я оплатил — активировать';
+          }
+        };
+      }
+
       var miniBtn = document.getElementById('miniTonBtn');
       var miniPanel = document.getElementById('miniTonPanel');
       var miniVerify = document.getElementById('miniTonVerify');

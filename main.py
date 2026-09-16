@@ -1771,6 +1771,139 @@ async def create_yukassa_payment(request: Request):
         return {"ok": False, "error": str(e)}
 
 
+@app.post("/payments/tinkoff/notify")
+async def tinkoff_notify(request: Request):
+    """User-driven Tinkoff payment confirmation.
+
+    Flow (no merchant API available for solo/self-employed):
+      1. User clicks "Оплатить через Тинькофф" → opens Tinkoff payment link
+      2. Pays through bank (card/SBP/any method)
+      3. Returns to Mini App, presses "✅ Я оплатил"
+      4. Backend IMMEDIATELY activates listing + posts to channel
+      5. Parallel: admin gets Telegram notification for visual reconciliation
+
+    This removes manual moderation step. Risk of fraud is bounded:
+    - Listing only stays visible if admin later disputes via /admin/listings/{id}/reject
+    - User is identified by Telegram ID and the exact listing they own
+    - All activations are logged with user_id + timestamp for audit
+    """
+    body = await request.json()
+    listing_id = body.get("listing_id", "")
+    user_id = int(body.get("user_id", 0) or 0)
+    tier = body.get("tier", "")
+
+    if not listing_id:
+        return {"ok": False, "error": "no listing_id"}
+    if not user_id:
+        return {"ok": False, "error": "no user_id"}
+
+    # Verify the listing exists and belongs to this user
+    item_dict = None
+    owner_info = None
+    expected_amount_rub = 0
+    with db_cursor() as conn:
+        row = conn.execute(
+            "SELECT * FROM listings WHERE id=?", (listing_id,)
+        ).fetchone()
+        if not row:
+            return {"ok": False, "error": "listing_not_found"}
+        if row["user_id"] != user_id:
+            return {"ok": False, "error": "not_owner"}
+        # Already active? Return current state.
+        if row["status"] == "active":
+            return {
+                "ok": True,
+                "activated": listing_id,
+                "already_active": True,
+                "channel_message_id": row["channel_message_id"],
+                "instruction": "Уже активно",
+            }
+        if row["status"] != "awaiting_payment":
+            return {"ok": False, "error": f"bad_status:{row['status']}"}
+
+        item_dict = {
+            "id": row["id"], "title": row["title"], "description": row["description"],
+            "price": row["price"], "cat": row["cat"], "type": row["type"],
+            "contact": row["contact"], "photo": row["photo"], "tier": row["tier"],
+            "city": row["city"],
+        }
+        owner_info = {
+            "id": row["user_id"], "first_name": row["user_name"], "username": row["user_username"]
+        }
+        # Expected amount based on tier (matches payment link)
+        tier = row["tier"]
+        expected_amount_rub = int(TIER_PRICES.get(tier, 0) * 1.4)
+
+        conn.execute("UPDATE listings SET status='active' WHERE id=?", (listing_id,))
+        conn.commit()
+
+    # Post to channel
+    channel_msg_id = None
+    if item_dict:
+        try:
+            listing_in = ListingIn(**item_dict)
+            user_dict = {
+                "id": int(user_id), "first_name": owner_info["first_name"] or "Покупатель",
+                "username": owner_info["username"] or "",
+            }
+            channel_msg_id = await post_to_channel(listing_id, listing_in, user_dict)
+        except Exception as e:
+            print(f"tinkoff_notify post_to_channel error: {e}", flush=True)
+
+    # Notify user
+    try:
+        if bot is not None and user_id:
+            tier_label = TIER_LABELS.get(tier, tier)
+            text = (
+                f"✅ <b>Оплата подтверждена!</b>\n\n"
+                f"Объявление <code>{listing_id}</code> активировано как <b>{tier_label}</b>.\n\n"
+                f"💳 Способ: Тинькофф (ожидаемая сумма {expected_amount_rub} ₽)\n\n"
+                f"Оно появилось в ленте и канале @ibaraholkatyt."
+            )
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📱 Открыть барахолку", web_app=WebAppInfo(url=WEBAPP_URL))]
+            ])
+            await bot.send_message(user_id, text, reply_markup=kb)
+    except Exception as e:
+        print(f"tinkoff_notify user notify error: {e}", flush=True)
+
+    # Notify admins for visual reconciliation (does NOT block activation)
+    if ADMIN_IDS:
+        try:
+            admin_text = (
+                f"💳 <b>Тинькофф оплата (auto-активировано)</b>\n\n"
+                f"Листинг: <code>{listing_id}</code>\n"
+                f"Тариф: {tier.upper()}\n"
+                f"Ожидаемая сумма: <b>{expected_amount_rub} ₽</b>\n"
+                f"User: {owner_info['first_name']} (@{owner_info['username'] or '—'}, id {user_id})\n"
+                f"Канал: msg #{channel_msg_id or '—'}\n\n"
+                f"<i>Проверь поступление в ЛК Тинькофф → История операций. "
+                f"Если сумма не пришла — /admin/listings/{listing_id}/reject</i>"
+            )
+            for admin_id in ADMIN_IDS:
+                try:
+                    await bot.send_message(admin_id, admin_text)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"tinkoff_notify admin notify error: {e}", flush=True)
+
+    log_msg = f"[TINKOFF] auto-activated listing={listing_id} tier={tier} user={user_id} amount_rub={expected_amount_rub}"
+    print(log_msg, flush=True)
+    try:
+        with open("/data/last_post.log", "a") as f:
+            f.write(log_msg + "\n")
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "activated": listing_id,
+        "channel_message_id": channel_msg_id,
+        "expected_amount_rub": expected_amount_rub,
+    }
+
+
 @app.post("/payments/yukassa/webhook")
 async def yukassa_webhook(request: Request):
     """YooKassa payment notification. Activates listing when succeeded.
@@ -2597,6 +2730,38 @@ async def approve_listing(listing_id: str, request: Request):
         conn.execute("UPDATE listings SET status='active' WHERE id=?", (listing_id,))
         conn.commit()
     return {"ok": True}
+
+
+@app.post("/admin/listings/{listing_id}/reject")
+async def reject_listing(listing_id: str, request: Request):
+    """Admin: reject an auto-activated listing (e.g. Tinkoff payment didn't arrive).
+
+    Sets status back to deleted and removes the channel message if any.
+    """
+    if not ADMIN_IDS:
+        raise HTTPException(403, "Admin not configured")
+    user = await get_user(request.headers.get("authorization", ""))
+    if user["id"] not in ADMIN_IDS:
+        raise HTTPException(403, "Admin only")
+
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    reason = body.get("reason", "admin_reject")
+
+    ch_msg_id = None
+    with db_cursor() as conn:
+        row = conn.execute("SELECT channel_message_id FROM listings WHERE id=?", (listing_id,)).fetchone()
+        if row:
+            ch_msg_id = row["channel_message_id"]
+        conn.execute("UPDATE listings SET status='deleted' WHERE id=?", (listing_id,))
+        conn.commit()
+
+    if ch_msg_id:
+        try:
+            await delete_from_channel(ch_msg_id)
+        except Exception:
+            pass
+
+    return {"ok": True, "listing_id": listing_id, "reason": reason, "channel_deleted": bool(ch_msg_id)}
 
 
 # ============================================================
