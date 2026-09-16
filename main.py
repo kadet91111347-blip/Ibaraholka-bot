@@ -30,7 +30,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Header, Request, Query
+from fastapi import FastAPI, HTTPException, Header, Request, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -2288,16 +2288,30 @@ def _seed_ads_if_empty():
             conn.commit()
 
 
-# Seed at module load
-try:
-    _seed_ads_if_empty()
-except Exception as e:
-    logging.warning("seed_ads failed: %s", e)
+# Lazy seed: called inside endpoint, after init_db()
+def _seed_ads_if_empty():
+    """Insert seed ads on first start (idempotent)."""
+    now = int(datetime.now().timestamp() * 1000)
+    with db_cursor() as conn:
+        cur = conn.execute("SELECT COUNT(*) FROM ad_creatives")
+        if cur.fetchone()[0] == 0:
+            for i, ad in enumerate(SEED_AD_CREATIVES, start=1):
+                conn.execute(
+                    "INSERT INTO ad_creatives (id, title, description, image_url, click_url, reward_coins, duration_sec, enabled, weight, created) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1, ?)",
+                    (i, ad["title"], ad["description"], ad["image_url"], ad["click_url"],
+                     ad["reward_coins"], ad["duration_sec"], now),
+                )
+            conn.commit()
 
 
 @app.get("/ads/next")
 async def ads_next(user: Dict = Depends(get_user)):
     """Return the next ad creative for this user. Anti-fraud: refuses if last view was < 30s ago."""
+    try:
+        _seed_ads_if_empty()
+    except Exception as e:
+        logging.warning("seed_ads in /ads/next failed: %s", e)
     user_id = int(user["id"])
     now_ms = int(datetime.now().timestamp() * 1000)
 
