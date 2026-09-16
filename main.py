@@ -2292,18 +2292,24 @@ def _seed_ads_if_empty():
             conn.commit()
 
 
-def _credit_due_ads(conn, user_id: int, now_ms: int) -> int:
-    """Auto-credit all 'due' ad views for user (created + duration_sec*1000 <= now_ms).
+def _credit_due_ads(conn, user_id: int, now_sec: int) -> int:
+    """Auto-credit all 'due' ad views for user (created + duration_sec <= now_sec).
 
     Returns total coins credited this call. Used by /user/balance, /ads/next,
     /payments/coins/pay — guarantees coins arrive even if user closed the app.
+
+    Works with both psycopg2 RealDictCursor and sqlite3 tuple-style rows.
     """
+    def _g(row, key, idx):
+        if isinstance(row, dict):
+            return row.get(key)
+        return row[idx]
     try:
         rows = conn.execute(
             "SELECT v.id, v.ad_id, v.coins_credited "
             "FROM ad_views v WHERE v.user_id=? AND v.completed=0 "
-            "AND EXISTS (SELECT 1 FROM ad_creatives a WHERE a.id=v.ad_id AND v.created + a.duration_sec*1000 <= ?)",
-            (user_id, now_ms),
+            "AND EXISTS (SELECT 1 FROM ad_creatives a WHERE a.id=v.ad_id AND v.created + a.duration_sec <= ?)",
+            (user_id, now_sec),
         ).fetchall()
     except Exception as e:
         logging.warning("_credit_due_ads query failed: %s", e)
@@ -2312,8 +2318,11 @@ def _credit_due_ads(conn, user_id: int, now_ms: int) -> int:
         return 0
     total = 0
     credited_ad_ids = []
-    for view_id, ad_id, coins_credited in rows:
-        total += int(coins_credited or 0)
+    for r in rows:
+        view_id = _g(r, "id", 0)
+        ad_id = _g(r, "ad_id", 1)
+        coins = _g(r, "coins_credited", 2) or 0
+        total += int(coins)
         credited_ad_ids.append(int(ad_id))
         conn.execute(
             "UPDATE ad_views SET completed=1 WHERE id=?",
@@ -2324,23 +2333,23 @@ def _credit_due_ads(conn, user_id: int, now_ms: int) -> int:
             "SELECT coins, total_earned FROM user_balances WHERE user_id=?",
             (user_id,),
         ).fetchone()
+        new_coins, new_earned = 0, 0
         if bal:
-            new_coins = (bal[0] or 0) + total
-            new_earned = (bal[1] or 0) + total
+            cur_coins = _g(bal, "coins", 0) or 0
+            cur_earned = _g(bal, "total_earned", 1) or 0
+            new_coins = cur_coins + total
+            new_earned = cur_earned + total
             conn.execute(
                 "UPDATE user_balances SET coins=?, total_earned=?, updated=? WHERE user_id=?",
-                (new_coins, new_earned, now_ms, user_id),
+                (new_coins, new_earned, now_sec, user_id),
             )
         else:
+            new_coins = total
+            new_earned = total
             conn.execute(
                 "INSERT INTO user_balances (user_id, coins, total_earned, total_spent, updated) "
                 "VALUES (?, ?, ?, 0, ?)",
-                (user_id, total, total, now_ms),
-            )
-        for ad_id in credited_ad_ids:
-            conn.execute(
-                "UPDATE ad_creatives SET shown_count = shown_count + 1 WHERE id=?",
-                (ad_id,),
+                (user_id, new_coins, new_earned, now_sec),
             )
     return total
 
@@ -2353,7 +2362,7 @@ async def ads_start(request: Request, user: Dict = Depends(get_user)):
     stay on the page. Just check /user/balance later.
     """
     user_id = int(user["id"])
-    now_ms = int(datetime.now().timestamp() * 1000)
+    now_sec = int(datetime.now().timestamp())
     try:
         body = await request.json()
     except Exception:
@@ -2377,22 +2386,32 @@ async def ads_start(request: Request, user: Dict = Depends(get_user)):
             "SELECT reward_coins, duration_sec, enabled FROM ad_creatives WHERE id=?",
             (ad_id,),
         ).fetchone()
-        if not ad_row or not ad_row[2]:
+        if not ad_row:
+            return {"ok": False, "error": "ad_not_found"}
+        # dict/tuple agnostic
+        if isinstance(ad_row, dict):
+            enabled = ad_row.get("enabled")
+            reward = ad_row.get("reward_coins") or 0
+            duration_sec = ad_row.get("duration_sec") or 0
+        else:
+            enabled = ad_row[2]
+            reward = ad_row[0] or 0
+            duration_sec = ad_row[1] or 0
+        if not enabled:
             return {"ok": False, "error": "ad_disabled"}
-        reward, duration_sec, _ = ad_row
-        view_id = int(now_ms) ^ user_id
+        view_id = (now_sec * 1000) ^ user_id
         conn.execute(
             "INSERT INTO ad_views (id, user_id, ad_id, coins_credited, created, completed) "
             "VALUES (?, ?, ?, ?, ?, 0)",
-            (view_id, user_id, ad_id, reward, now_ms),
+            (view_id, user_id, ad_id, reward, now_sec),
         )
         conn.commit()
     return {
         "ok": True,
         "ad_id": ad_id,
-        "duration_sec": duration_sec,
-        "reward": reward,
-        "pending_until_ts": now_ms + duration_sec * 1000,
+        "duration_sec": int(duration_sec),
+        "reward": int(reward),
+        "pending_until_ts": now_sec + int(duration_sec),
         "message": f"+{reward} ⭐ начислится через {duration_sec} сек автоматически",
     }
 
@@ -2405,11 +2424,14 @@ async def ads_next(user: Dict = Depends(get_user)):
     except Exception as e:
         logging.warning("seed_ads in /ads/next failed: %s", e)
     user_id = int(user["id"])
-    now_ms = int(datetime.now().timestamp() * 1000)
+    now_sec = int(datetime.now().timestamp())
+
+    def _g(row, key, idx):
+        return row.get(key) if isinstance(row, dict) else row[idx]
 
     with db_cursor() as conn:
         # Auto-credit any ads whose duration has already passed (server-side timer)
-        credited_now = _credit_due_ads(conn, user_id, now_ms)
+        credited_now = _credit_due_ads(conn, user_id, now_sec)
         if credited_now > 0:
             conn.commit()
         # Anti-fraud: последний просмотр
@@ -2417,8 +2439,8 @@ async def ads_next(user: Dict = Depends(get_user)):
             "SELECT created FROM ad_views WHERE user_id=? ORDER BY created DESC LIMIT 1",
             (user_id,),
         ).fetchone()
-        if last and (now_ms - last[0]) < AD_COOLDOWN_SEC * 1000:
-            wait_sec = AD_COOLDOWN_SEC - int((now_ms - last[0]) / 1000)
+        if last and (now_sec - _g(last, "created", 0)) < AD_COOLDOWN_SEC:
+            wait_sec = AD_COOLDOWN_SEC - int((now_sec - _g(last, "created", 0)))
             return {
                 "ok": False,
                 "reason": "cooldown",
@@ -2431,7 +2453,7 @@ async def ads_next(user: Dict = Depends(get_user)):
             "SELECT ad_id FROM ad_views WHERE user_id=? ORDER BY created DESC LIMIT 1",
             (user_id,),
         ).fetchone()
-        last_ad_id = last_ad_row[0] if last_ad_row else None
+        last_ad_id = _g(last_ad_row, "ad_id", 0) if last_ad_row else None
 
         ads = conn.execute(
             "SELECT id, title, description, image_url, click_url, reward_coins, duration_sec "
@@ -2441,20 +2463,18 @@ async def ads_next(user: Dict = Depends(get_user)):
             return {"ok": False, "reason": "no_ads", "message": "Нет активной рекламы"}
 
         # Prefer ads different from last shown
-        candidates = [a for a in ads if a[0] != last_ad_id] or ads
+        candidates = [a for a in ads if _g(a, "id", 0) != last_ad_id] or ads
         ad = candidates[0]
-        ad_id, title, desc, img, click, reward, dur = ad
-
         return {
             "ok": True,
             "ad": {
-                "id": ad_id,
-                "title": title,
-                "description": desc,
-                "image_url": img,
-                "click_url": click,
-                "reward_coins": reward,
-                "duration_sec": dur,
+                "id": _g(ad, "id", 0),
+                "title": _g(ad, "title", 1),
+                "description": _g(ad, "description", 2),
+                "image_url": _g(ad, "image_url", 3),
+                "click_url": _g(ad, "click_url", 4),
+                "reward_coins": _g(ad, "reward_coins", 5),
+                "duration_sec": _g(ad, "duration_sec", 6),
             },
         }
 
@@ -2463,11 +2483,14 @@ async def ads_next(user: Dict = Depends(get_user)):
 async def ads_watch_complete(request: Request, user: Dict = Depends(get_user)):
     """User finished watching ad (after duration_sec). Credit IB Coins.
 
-    Body: {ad_id, view_id, duration_sec}
-    Server re-checks: cooldown (30s), ad exists & enabled, duration matches.
+    Legacy endpoint — kept for backward compat. New flow uses /ads/start +
+    auto-credit. Server re-checks: cooldown, ad exists & enabled.
     """
     user_id = int(user["id"])
-    now_ms = int(datetime.now().timestamp() * 1000)
+    now_sec = int(datetime.now().timestamp())
+
+    def _g(row, key, idx):
+        return row.get(key) if isinstance(row, dict) else row[idx]
 
     try:
         body = await request.json()
@@ -2484,24 +2507,24 @@ async def ads_watch_complete(request: Request, user: Dict = Depends(get_user)):
             "SELECT reward_coins, duration_sec, enabled FROM ad_creatives WHERE id=?",
             (ad_id,),
         ).fetchone()
-        if not ad_row or not ad_row[2]:
+        if not ad_row or not _g(ad_row, "enabled", 2):
             return {"ok": False, "error": "ad_disabled"}
-        reward, duration_sec, _ = ad_row
+        reward = _g(ad_row, "reward_coins", 0) or 0
 
         # Anti-fraud: cooldown check
         last = conn.execute(
             "SELECT created FROM ad_views WHERE user_id=? ORDER BY created DESC LIMIT 1",
             (user_id,),
         ).fetchone()
-        if last and (now_ms - last[0]) < AD_COOLDOWN_SEC * 1000:
-            wait_sec = AD_COOLDOWN_SEC - int((now_ms - last[0]) / 1000)
+        if last and (now_sec - _g(last, "created", 0)) < AD_COOLDOWN_SEC:
+            wait_sec = AD_COOLDOWN_SEC - int(now_sec - _g(last, "created", 0))
             return {"ok": False, "error": "cooldown", "wait_sec": max(wait_sec, 1)}
 
-        # Insert view record + update balance (atomic via SQL)
-        view_id = int(now_ms) ^ user_id  # simple unique-ish
+        # Insert view record + update balance
+        view_id = (now_sec * 1000) ^ user_id
         conn.execute(
             "INSERT INTO ad_views (id, user_id, ad_id, coins_credited, created, completed) VALUES (?, ?, ?, ?, ?, 1)",
-            (view_id, user_id, ad_id, reward, now_ms),
+            (view_id, user_id, ad_id, reward, now_sec),
         )
         conn.execute(
             "UPDATE ad_creatives SET shown_count = shown_count + 1 WHERE id=?",
@@ -2514,18 +2537,18 @@ async def ads_watch_complete(request: Request, user: Dict = Depends(get_user)):
             (user_id,),
         ).fetchone()
         if bal:
-            new_coins = bal[0] + reward
-            new_earned = bal[1] + reward
+            new_coins = (_g(bal, "coins", 0) or 0) + reward
+            new_earned = (_g(bal, "total_earned", 1) or 0) + reward
             conn.execute(
                 "UPDATE user_balances SET coins=?, total_earned=?, updated=? WHERE user_id=?",
-                (new_coins, new_earned, now_ms, user_id),
+                (new_coins, new_earned, now_sec, user_id),
             )
         else:
             new_coins = reward
             new_earned = reward
             conn.execute(
                 "INSERT INTO user_balances (user_id, coins, total_earned, total_spent, updated) VALUES (?, ?, ?, 0, ?)",
-                (user_id, new_coins, new_earned, now_ms),
+                (user_id, new_coins, new_earned, now_sec),
             )
         conn.commit()
 
@@ -2558,23 +2581,25 @@ async def ads_click(request: Request, user: Dict = Depends(get_user)):
 async def user_balance(user: Dict = Depends(get_user)):
     """Return current IB Coins balance + lifetime totals."""
     user_id = int(user["id"])
-    now_ms = int(datetime.now().timestamp() * 1000)
+    now_sec = int(datetime.now().timestamp())
     with db_cursor() as conn:
         # Auto-credit any ads whose duration has already passed
-        credited_now = _credit_due_ads(conn, user_id, now_ms)
+        credited_now = _credit_due_ads(conn, user_id, now_sec)
         if credited_now > 0:
             conn.commit()
         bal = conn.execute(
             "SELECT coins, total_earned, total_spent, updated FROM user_balances WHERE user_id=?",
             (user_id,),
         ).fetchone()
+    def _g(row, key, idx):
+        return row.get(key) if isinstance(row, dict) else row[idx]
     if bal:
         return {
             "ok": True,
-            "coins": bal[0],
-            "total_earned": bal[1],
-            "total_spent": bal[2],
-            "updated": bal[3],
+            "coins": _g(bal, "coins", 0) or 0,
+            "total_earned": _g(bal, "total_earned", 1) or 0,
+            "total_spent": _g(bal, "total_spent", 2) or 0,
+            "updated": _g(bal, "updated", 3) or 0,
             "credited_now": credited_now,
         }
     return {"ok": True, "coins": 0, "total_earned": 0, "total_spent": 0, "updated": 0, "credited_now": credited_now}
@@ -2593,7 +2618,7 @@ async def payments_coins_pay(request: Request, user: Dict = Depends(get_user)):
     - else → 402 "insufficient funds"
     """
     user_id = int(user["id"])
-    now_ms = int(datetime.now().timestamp() * 1000)
+    now_sec = int(datetime.now().timestamp())
     try:
         body = await request.json()
     except Exception:
@@ -2602,9 +2627,12 @@ async def payments_coins_pay(request: Request, user: Dict = Depends(get_user)):
     if not listing_id:
         raise HTTPException(400, "listing_id required")
 
+    def _g(row, key, idx):
+        return row.get(key) if isinstance(row, dict) else row[idx]
+
     with db_cursor() as conn:
         # Auto-credit any ads whose duration has already passed
-        credited_now = _credit_due_ads(conn, user_id, now_ms)
+        credited_now = _credit_due_ads(conn, user_id, now_sec)
         if credited_now > 0:
             conn.commit()
         # Lock listing row
@@ -2614,11 +2642,11 @@ async def payments_coins_pay(request: Request, user: Dict = Depends(get_user)):
         ).fetchone()
         if not row:
             return {"ok": False, "error": "listing_not_found"}
-        if int(row[1]) != user_id:
+        if int(_g(row, "user_id", 1)) != user_id:
             return {"ok": False, "error": "not_owner"}
-        tier = row[2]
-        status = row[3]
-        title = row[4]
+        tier = _g(row, "tier", 2)
+        status = _g(row, "status", 3)
+        title = _g(row, "title", 4)
 
         if tier == "free":
             return {"ok": False, "error": "free_no_payment"}
@@ -2635,7 +2663,8 @@ async def payments_coins_pay(request: Request, user: Dict = Depends(get_user)):
             "SELECT coins FROM user_balances WHERE user_id=?",
             (user_id,),
         ).fetchone()
-        coins = bal[0] if bal else 0
+        coins = _g(bal, "coins", 0) if bal else 0
+        coins = coins or 0
         if coins < price_coins:
             need = price_coins - coins
             return {
@@ -2651,14 +2680,14 @@ async def payments_coins_pay(request: Request, user: Dict = Depends(get_user)):
         new_coins = coins - price_coins
         conn.execute(
             "UPDATE user_balances SET coins=?, total_spent=total_spent+?, updated=? WHERE user_id=?",
-            (new_coins, price_coins, now_ms, user_id),
+            (new_coins, price_coins, now_sec, user_id),
         )
 
         # Activate listing (set expires_at if missing)
         expires_at = int(datetime.now().timestamp()) + TIER_DURATIONS.get(tier, 7 * 86400)
         conn.execute(
             "UPDATE listings SET status='active', paid_at=?, expires_at=? WHERE id=?",
-            (now_ms, expires_at, listing_id),
+            (now_sec, expires_at, listing_id),
         )
         conn.commit()
 
@@ -2711,25 +2740,29 @@ async def admin_ads(request: Request, x_admin_token: str = Header(None, alias="x
             "SELECT COALESCE(SUM(coins),0) AS outstanding, COALESCE(SUM(total_earned),0) AS all_earned, "
             "COALESCE(SUM(total_spent),0) AS all_spent FROM user_balances"
         ).fetchone()
+    def _g(row, key, idx):
+        return row.get(key) if isinstance(row, dict) else row[idx]
     return {
         "ok": True,
         "ads": [
             {
-                "id": a[0], "title": a[1], "description": a[2], "image_url": a[3],
-                "click_url": a[4], "reward_coins": a[5], "duration_sec": a[6],
-                "enabled": bool(a[7]), "weight": a[8], "shown_count": a[9],
-                "click_count": a[10], "created": a[11],
+                "id": _g(a, "id", 0), "title": _g(a, "title", 1), "description": _g(a, "description", 2),
+                "image_url": _g(a, "image_url", 3), "click_url": _g(a, "click_url", 4),
+                "reward_coins": _g(a, "reward_coins", 5), "duration_sec": _g(a, "duration_sec", 6),
+                "enabled": bool(_g(a, "enabled", 7)), "weight": _g(a, "weight", 8),
+                "shown_count": _g(a, "shown_count", 9), "click_count": _g(a, "click_count", 10),
+                "created": _g(a, "created", 11),
             } for a in ads
         ],
         "stats": {
-            "total_views": stats[0],
-            "coins_paid": stats[1],
-            "unique_users": stats[2],
+            "total_views": _g(stats, "total_views", 0) if stats else 0,
+            "coins_paid": _g(stats, "coins_paid", 1) if stats else 0,
+            "unique_users": _g(stats, "unique_users", 2) if stats else 0,
         },
         "balances": {
-            "outstanding": bal_totals[0],
-            "total_earned": bal_totals[1],
-            "total_spent": bal_totals[2],
+            "outstanding": _g(bal_totals, "outstanding", 0) if bal_totals else 0,
+            "total_earned": _g(bal_totals, "all_earned", 1) if bal_totals else 0,
+            "total_spent": _g(bal_totals, "all_spent", 2) if bal_totals else 0,
         },
     }
 
