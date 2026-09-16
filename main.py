@@ -4072,7 +4072,7 @@ async def match_subscribe(request: Request, user: Dict = Depends(get_user)):
     except Exception as e:
         import traceback
         logger.error(f"match_subscribe create_failed: {e}\n{traceback.format_exc()}")
-        return {"ok": False, "error": f"create_failed: {e}"}
+        return {"ok": False, "error": f"create_failed: {e}", "tb": traceback.format_exc()}
 
     return {"ok": True, "subscription_id": sub_id, "filters": parsed,
             "is_free": is_free, "message": "Подписка создана — буду присылать подходящие объявления"}
