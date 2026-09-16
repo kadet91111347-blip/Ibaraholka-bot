@@ -24,6 +24,8 @@ import time
 import hmac
 import hashlib
 import urllib.parse
+import secrets as _secrets
+import httpx
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 from contextlib import asynccontextmanager
@@ -311,6 +313,12 @@ async def get_user(authorization: str = Header(None)) -> Dict[str, Any]:
 TIER_PRICES = {"premium": 50, "vip": 150}  # Stars
 TIER_DURATIONS = {"premium": 24 * 3600, "vip": 7 * 24 * 3600}  # seconds
 TIER_LABELS = {"free": "Бесплатно", "premium": "⭐ TOP 24ч (50⭐)", "vip": "👑 VIP 7 дней (150⭐)"}
+
+# TON Connect prices (in TON; ~280 RUB/TON)
+TON_WALLET_ADDRESS = os.getenv("TON_WALLET_ADDRESS", "UQPLACEHOLDER_SET_IN_RENDER_ENV").strip()
+TON_PRICES = {"premium": 0.25, "vip": 0.75}  # TON
+TONCENTER_API = os.getenv("TONCENTER_API", "https://toncenter.com/api/v2")
+TON_NANOTON = 1_000_000_000
 
 
 class ListingIn(BaseModel):
@@ -1703,6 +1711,226 @@ async def yukassa_webhook(request: Request):
         return {"ok": True, "activated": listing_id}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+# ============================================================
+# TON Connect payments
+# ============================================================
+
+async def _ton_check_tx(to_address: str, amount_nano: int, comment: str, since_ts: int = 0):
+    """Check TON Center API for incoming tx matching address + amount + comment.
+    Returns (found: bool, tx_hash: str|None).
+    """
+    try:
+        # Get transactions on the wallet (limit 20 most recent).
+        url = f"{TONCENTER_API}/getTransactions"
+        params = {
+            "address": to_address,
+            "limit": 20,
+            "api_key": os.getenv("TONCENTER_API_KEY", ""),
+        }
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.get(url, params=params)
+        if r.status_code != 200:
+            return False, None
+        data = r.json()
+        if not data.get("ok"):
+            return False, None
+        for tx in data.get("result", []):
+            in_msg = tx.get("in_msg") or {}
+            value = int(in_msg.get("value", 0) or 0)
+            tx_comment = in_msg.get("message", "") or ""
+            tx_time = int(tx.get("utime", 0) or 0)
+            if value >= amount_nano and tx_comment.strip() == comment.strip() and tx_time >= since_ts:
+                return True, tx.get("transaction_id", {}).get("hash", "")
+    except Exception as e:
+        logger.error(f"_ton_check_tx error: {e}")
+    return False, None
+
+
+@app.post("/payments/ton/create")
+async def ton_create_payment(request: Request):
+    """Create a TON payment intent for a listing.
+    Returns: wallet address, amount (TON), unique comment (used as payment reference).
+    """
+    try:
+        body = await request.json()
+        listing_id = body.get("listing_id", "").strip()
+        tier = body.get("tier", "").strip()
+        if not listing_id or tier not in TON_PRICES:
+            return {"ok": False, "error": "invalid listing_id or tier"}
+
+        amount_ton = TON_PRICES[tier]
+        amount_nano = int(amount_ton * TON_NANOTON)
+
+        # Unique comment = listing_id + nonce (so tx is uniquely identifiable).
+        nonce = _secrets.token_hex(4)
+        comment = f"ib_{listing_id[:12]}_{nonce}"
+
+        # Persist pending payment row so verify can match.
+        now = int(time.time())
+        with db_cursor() as conn:
+            # Create payments table on first run.
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS ton_payments (
+                    id BIGSERIAL PRIMARY KEY,
+                    listing_id TEXT NOT NULL,
+                    tier TEXT NOT NULL,
+                    amount_nano BIGINT NOT NULL,
+                    comment TEXT NOT NULL UNIQUE,
+                    tx_hash TEXT,
+                    user_id BIGINT,
+                    created INTEGER NOT NULL,
+                    confirmed INTEGER,
+                    tx_time INTEGER
+                )
+            """)
+            conn.execute(
+                "INSERT INTO ton_payments (listing_id, tier, amount_nano, comment, created) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (listing_id, tier, amount_nano, comment, now),
+            )
+            conn.commit()
+
+        wallet = TON_WALLET_ADDRESS
+        if wallet.startswith("UQPLACEHOLDER"):
+            return {
+                "ok": False,
+                "error": "TON_WALLET_ADDRESS not configured (set in Render env)",
+            }
+
+        return {
+            "ok": True,
+            "wallet": wallet,
+            "amount_ton": amount_ton,
+            "amount_nano": amount_nano,
+            "comment": comment,
+            "listing_id": listing_id,
+            "tier": tier,
+            "instructions": (
+                f"Send exactly {amount_ton} TON to {wallet} "
+                f"with comment '{comment}'. "
+                "Tap 'Verify' after sending."
+            ),
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/payments/ton/verify")
+async def ton_verify_payment(request: Request):
+    """Verify a TON payment by checking on-chain for the comment + amount.
+    Activates listing tier on success.
+    """
+    try:
+        body = await request.json()
+        listing_id = body.get("listing_id", "").strip()
+        comment = body.get("comment", "").strip()
+        user_id = body.get("user_id", 0)
+        if not listing_id or not comment:
+            return {"ok": False, "error": "listing_id and comment required"}
+
+        # Look up pending payment.
+        with db_cursor() as conn:
+            row = conn.execute(
+                "SELECT * FROM ton_payments WHERE comment=? AND listing_id=?",
+                (comment, listing_id),
+            ).fetchone()
+            if not row:
+                return {"ok": False, "error": "payment intent not found"}
+            if row.get("confirmed"):
+                # Already confirmed; idempotent re-activation.
+                return {"ok": True, "already_confirmed": True, "listing_id": listing_id}
+            tier = row["tier"]
+            amount_nano = int(row["amount_nano"])
+            created_ts = int(row["created"])
+
+        # Check on-chain.
+        found, tx_hash = await _ton_check_tx(
+            TON_WALLET_ADDRESS, amount_nano, comment, since_ts=created_ts - 60
+        )
+        if not found:
+            return {
+                "ok": False,
+                "verified": False,
+                "error": "tx not found yet — wait 30s and tap Verify again",
+            }
+
+        # Mark confirmed and activate listing.
+        now = int(time.time())
+        with db_cursor() as conn:
+            conn.execute(
+                "UPDATE ton_payments SET confirmed=?, tx_hash=?, tx_time=?, user_id=? "
+                "WHERE comment=?",
+                (now, tx_hash, now, user_id, comment),
+            )
+            row = conn.execute(
+                "SELECT * FROM listings WHERE id=?", (listing_id,)
+            ).fetchone()
+            if row:
+                conn.execute(
+                    "UPDATE listings SET status='active' WHERE id=?", (listing_id,)
+                )
+                conn.commit()
+                item_dict = {
+                    "id": row["id"], "title": row["title"], "description": row["description"],
+                    "price": row["price"], "cat": row["cat"], "type": row["type"],
+                    "contact": row["contact"], "photo": row["photo"], "tier": row["tier"],
+                    "city": row["city"],
+                }
+            else:
+                item_dict = None
+
+        # Post to channel.
+        if item_dict:
+            try:
+                user = {
+                    "id": int(user_id) if user_id else 0,
+                    "first_name": "Покупатель",
+                    "username": "",
+                }
+                listing_in = ListingIn(**item_dict)
+                await post_to_channel(listing_id, listing_in, user)
+            except Exception as e:
+                print(f"TON verify post_to_channel error: {e}", flush=True)
+
+        # Notify user.
+        try:
+            if user_id and bot is not None:
+                text = (
+                    f"✅ <b>Оплата TON получена!</b>\n\n"
+                    f"Объявление <code>{listing_id}</code> ({tier.upper()}) активировано.\n"
+                    f"💎 Списано: {TON_PRICES[tier]} TON\n"
+                    f"🔗 Tx: <code>{tx_hash[:16]}…</code>\n\n"
+                    f"Оно появилось в канале @ibaraholkatyt."
+                )
+                kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="📱 Открыть барахолку", web_app=WebAppInfo(url=WEBAPP_URL))]
+                ])
+                await bot.send_message(int(user_id), text, reply_markup=kb)
+        except Exception as e:
+            print(f"TON verify notify error: {e}", flush=True)
+
+        return {
+            "ok": True,
+            "verified": True,
+            "listing_id": listing_id,
+            "tier": tier,
+            "tx_hash": tx_hash,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/payments/ton/wallet")
+async def ton_wallet_info():
+    """Public info: wallet address + tier prices for the frontend."""
+    return {
+        "ok": True,
+        "wallet": TON_WALLET_ADDRESS,
+        "configured": not TON_WALLET_ADDRESS.startswith("UQPLACEHOLDER"),
+        "prices": TON_PRICES,
+    }
 
 
 @app.post("/debug/create-vip-test")

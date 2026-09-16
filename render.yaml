@@ -24,3 +24,7 @@ services:
         sync: false
       - key: DATABASE_URL
         sync: false
+      - key: TON_WALLET_ADDRESS
+        sync: false
+      - key: TONCENTER_API_KEY
+        sync: false
