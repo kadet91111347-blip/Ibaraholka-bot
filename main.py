@@ -2791,6 +2791,42 @@ async def debug_list_ads():
     return out
 
 
+@app.get("/debug/test-ads-next")
+async def debug_test_ads_next():
+    """Temporary: directly exercise the /ads/next logic and capture traceback."""
+    import traceback
+    try:
+        user_id = 748834052  # Sasha test
+        now_sec = int(datetime.now().timestamp())
+        def _g(row, key, idx):
+            return row.get(key) if isinstance(row, dict) else row[idx]
+        with db_cursor() as conn:
+            credited_now = _credit_due_ads(conn, user_id, now_sec)
+            if credited_now > 0:
+                conn.commit()
+            last = conn.execute(
+                "SELECT created FROM ad_views WHERE user_id=? ORDER BY created DESC LIMIT 1",
+                (user_id,),
+            ).fetchone()
+            info = {
+                "credited_now": credited_now,
+                "last_row": dict(last) if isinstance(last, dict) else (list(last) if last else None),
+                "now_sec": now_sec,
+            }
+            last_ad_row = conn.execute(
+                "SELECT ad_id FROM ad_views WHERE user_id=? ORDER BY created DESC LIMIT 1",
+                (user_id,),
+            ).fetchone()
+            info["last_ad_row"] = dict(last_ad_row) if isinstance(last_ad_row, dict) else (list(last_ad_row) if last_ad_row else None)
+            ads = conn.execute(
+                "SELECT id, title, reward_coins, duration_sec FROM ad_creatives WHERE enabled=1 ORDER BY id LIMIT 5"
+            ).fetchall()
+            info["ads"] = [dict(a) if isinstance(a, dict) else list(a) for a in ads]
+        return {"ok": True, "info": info}
+    except Exception as e:
+        return {"ok": False, "err": str(e), "tb": traceback.format_exc()[:2000]}
+
+
 @app.get("/debug/run-seed")
 async def debug_run_seed():
     """Force-run lazy seed and return result/error."""
