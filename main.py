@@ -5040,15 +5040,31 @@ async def saved_filters_delete(filter_id: int, user: Dict[str, Any] = Depends(ge
 async def profile_me(user: Dict[str, Any] = Depends(get_user)):
     """Профиль текущего юзера: мои объявления, баланс, подписки, сделки, реф-стата."""
     uid = int(user["id"])
-    try:
-        return await _profile_me_impl(uid, user)
-    except Exception as e:
-        import traceback
-        logger.error(f"/profile/me error: {e}\n{traceback.format_exc()}")
-        return {"ok": False, "error": "internal", "tb": traceback.format_exc()[-500:]}
-
-
-async def _profile_me_impl(uid: int, user: Dict[str, Any]):
+    listing_cols = ["id", "user_id", "user_name", "user_username", "title", "description", "price", "cat", "type", "contact", "photo", "tier", "city", "status", "created", "expires_at", "channel_message_id", "paid_at"]
+    sub_cols = ["id", "query", "cat", "max_price_rub", "city", "active", "is_free", "paid_until", "last_notified"]
+    deal_cols = ["id", "listing_id", "amount_rub", "status", "created"]
+    with db_cursor() as conn:
+        my_active = [_row_to_dict(r, listing_cols) for r in conn.execute(
+            "SELECT * FROM listings WHERE user_id = ? AND status = 'active' ORDER BY created DESC LIMIT 50", (uid,)
+        ).fetchall()]
+        my_total_rows = conn.execute("SELECT COUNT(*) AS n FROM listings WHERE user_id = ? AND status IN ('active','sold')", (uid,)).fetchone()
+        bal_rows = conn.execute("SELECT coins, total_earned, vip_until FROM user_balances WHERE user_id = ?", (uid,)).fetchone()
+        up_rows = conn.execute("SELECT vip_until FROM user_balances WHERE user_id = ?", (uid,)).fetchone()
+        subs = [_row_to_dict(r, sub_cols) for r in conn.execute(
+            "SELECT id, query, cat, max_price_rub, city, active, is_free, paid_until, last_notified FROM match_subscriptions WHERE user_id = ? ORDER BY created DESC", (uid,)
+        ).fetchall()]
+        deals_buyer = [_row_to_dict(r, deal_cols) for r in conn.execute(
+            "SELECT id, listing_id, amount_rub, status, created FROM deals WHERE buyer_id = ? ORDER BY created DESC LIMIT 20", (uid,)
+        ).fetchall()]
+        deals_seller = [_row_to_dict(r, deal_cols) for r in conn.execute(
+            "SELECT id, listing_id, amount_rub, status, created FROM deals WHERE seller_id = ? ORDER BY created DESC LIMIT 20", (uid,)
+        ).fetchall()]
+        fav_count_rows = conn.execute("SELECT COUNT(*) AS n FROM favorites WHERE user_id = ?", (uid,)).fetchone()
+        refs_rows = conn.execute("SELECT COUNT(*) AS n FROM referrals WHERE referrer_id = ?", (uid,)).fetchone()
+        rating_rows = conn.execute("SELECT AVG(rating)::float AS avg, COUNT(*) AS n FROM reviews WHERE seller_id = ?", (uid,)).fetchone()
+        bal = conn.execute("SELECT coins, total_earned FROM user_balances WHERE user_id = ?", (uid,)).fetchone()
+        up = conn.execute("SELECT vip_until FROM user_balances WHERE user_id = ?", (uid,)).fetchone()
+        my_total_n_row = conn.execute("SELECT COUNT(*) AS n FROM listings WHERE user_id = ? AND status IN ('active','sold')", (uid,)).fetchone()
     now = int(time.time())
     listing_cols = ["id", "user_id", "user_name", "user_username", "title", "description", "price", "cat", "type", "contact", "photo", "tier", "city", "status", "created", "expires_at", "channel_message_id", "paid_at"]
     sub_cols = ["id", "query", "cat", "max_price_rub", "city", "active", "is_free", "paid_until", "last_notified"]
