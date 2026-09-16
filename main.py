@@ -4457,6 +4457,18 @@ def test_postgres():
         return {"ok": False, "error": str(e)[:300], "debug": dbg}
 
 
+@app.get("/debug/test-deal-flow")
+def test_deal_flow(deal_id: str = ""):
+    """Reproduce tinkoff/notify deal branch to see where it fails."""
+    try:
+        with db_cursor() as conn:
+            row = conn.execute("SELECT * FROM deals WHERE id=?", (deal_id,)).fetchone()
+            return {"ok": True, "row_type": str(type(row)), "row_is_dict": isinstance(row, dict), "row": str(row)[:500]}
+    except Exception as e:
+        import traceback
+        return {"ok": False, "error": str(e), "trace": traceback.format_exc()}
+
+
 if __name__ == "__main__":
     try:
         asyncio.run(main())
