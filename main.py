@@ -3778,8 +3778,12 @@ def _parse_match_query(raw_query: str) -> Dict[str, Any]:
     for t in tokens:
         if t in stop:
             continue
-        if t.isdigit() and len(t) <= 4:
-            continue  # short numbers = prices
+        # Drop price-like tokens: "30", "30к", "30тыс", "30000", "30 000"
+        if t.isdigit():
+            continue  # any pure number = price fragment
+        # Drop tokens with trailing "к"/"тыс" (price shorthand): "30к", "30тыс"
+        if _re.match(r"^\d+[кkк]?(тыс)?$", t):
+            continue
         if len(t) < 2:
             continue
         keywords.append(t)
