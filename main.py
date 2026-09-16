@@ -4950,6 +4950,7 @@ async def delete_listing(listing_id: str, request: Request):
         return {"ok": True, "admin": True, "channel_deleted": deleted_from_channel}
 
     user = await get_user(request.headers.get("authorization", ""))
+    user_id_int = int(user["id"])
     with db_cursor() as conn:
         row = conn.execute(
             "SELECT user_id, channel_message_id FROM listings WHERE id=?",
@@ -4957,7 +4958,7 @@ async def delete_listing(listing_id: str, request: Request):
         ).fetchone()
         if not row:
             raise HTTPException(404, "Listing not found")
-        if row["user_id"] != user["id"]:
+        if int(row["user_id"]) != user_id_int:
             raise HTTPException(403, "Not your listing")
         ch_msg_id = row["channel_message_id"]
         conn.execute("DELETE FROM listings WHERE id=?", (listing_id,))
@@ -4986,7 +4987,7 @@ async def confirm_paid_http(listing_id: str, request: Request):
         if not row:
             raise HTTPException(404, "Listing not found")
         # Ownership check (demo/admin bypass allowed)
-        if row["user_id"] not in (999999, user["id"]) and user["id"] not in ADMIN_IDS:
+        if int(row["user_id"]) not in (999999, int(user["id"])) and int(user["id"]) not in ADMIN_IDS:
             raise HTTPException(403, "Not your listing")
         if row["status"] == "active":
             return {
@@ -5044,7 +5045,7 @@ async def cancel_payment_http(listing_id: str, request: Request):
         ).fetchone()
         if not row:
             raise HTTPException(404, "Listing not found")
-        if row["user_id"] not in (999999, user["id"]):
+        if int(row["user_id"]) not in (999999, int(user["id"])):
             raise HTTPException(403, "Not your listing")
         # Downgrade to free + clear any channel post
         old_msg = row["channel_message_id"]
