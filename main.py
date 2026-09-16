@@ -4978,11 +4978,15 @@ async def search(q: str = "", cat: str = "", city: str = "", max_price: int = 0,
     if max_price > 0:
         where.append("price <= ?")
         params.append(max_price)
-    sql = f"SELECT * FROM listings WHERE {' AND '.join(where)} ORDER BY created DESC LIMIT {limit}"
+    sql = f"SELECT id, user_id, user_name, user_username, title, description, price, cat, type, contact, photo, tier, city, status, created, expires_at, channel_message_id, paid_at FROM listings WHERE {' AND '.join(where)} ORDER BY created DESC LIMIT {limit}"
     cols = ["id", "user_id", "user_name", "user_username", "title", "description", "price", "cat", "type", "contact", "photo", "tier", "city", "status", "created", "expires_at", "channel_message_id", "paid_at"]
-    with db_cursor() as conn:
-        rows = conn.execute(sql, tuple(params)).fetchall()
-        items = [_row_to_dict(r, cols) for r in rows]
+    try:
+        with db_cursor() as conn:
+            rows = conn.execute(sql, tuple(params)).fetchall()
+            items = [_row_to_dict(r, cols) for r in rows]
+    except Exception as e:
+        logger.exception(f"/search failed: {e}")
+        return {"ok": False, "error": "search_failed", "msg": str(e)[:200]}
     return {"ok": True, "q": q, "count": len(items), "listings": items}
 
 
