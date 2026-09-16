@@ -4012,6 +4012,37 @@ async def debug_parse_match(q: str):
         return {"ok": False, "error": str(e), "tb": traceback.format_exc()}
 
 
+
+@app.post("/debug/match-subscribe-test")
+async def debug_match_subscribe_test(request: Request):
+    """Call match_subscribe logic directly with a fake user."""
+    import traceback
+    try:
+        body = await request.json()
+        # Fake user dict (just like validate_init_data would return)
+        user = {"id": 748834052, "first_name": "Sasha", "username": "Izdelie0810"}
+        # Create a fake Request-like object? We can directly call the logic by extracting it
+        # Instead, let's just emulate the SQL
+        from db_adapter import db_cursor
+        user_id = int(user["id"])
+        parsed = _parse_match_query(body.get("query", ""))
+        print(f"DEBUG parsed={parsed}")
+        now = int(time.time())
+        sub_id = "MS-DBGSUB-" + uuid.uuid4().hex[:6].upper()
+        with db_cursor() as conn:
+            conn.execute(
+                "INSERT INTO match_subscriptions "
+                "(id, user_id, user_name, user_username, query, keywords, cat, max_price_rub, city, color, extra, active, is_free, paid_until, created, last_notified) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,NULL)",
+                (sub_id, user_id, user["first_name"], user["username"],
+                 body.get("query", ""), ",".join(parsed["keywords"]), parsed["cat"], parsed["max_price"],
+                 parsed["city"], parsed["color"], parsed["extra"], 1, None, now),
+            )
+        return {"ok": True, "sub_id": sub_id, "parsed": parsed}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "tb": traceback.format_exc()}
+
+
 @app.post("/match/subscribe")
 async def match_subscribe(request: Request, user: Dict = Depends(get_user)):
     """Create a new match subscription.
