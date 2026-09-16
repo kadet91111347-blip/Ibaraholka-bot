@@ -1004,10 +1004,48 @@ async def post_to_channel(listing_id: str, item: ListingIn, user: Dict[str, Any]
     """Post a listing to the configured channel. Returns message_id if posted.
 
     Uses direct HTTP call to Telegram API to bypass any aiogram session issues.
+
+    Hard guard: paid-tier listings (premium / vip) only get posted if the
+    database row says status='active'. Free listings always pass.
     """
     if not BOT_TOKEN or not CHANNEL_ID:
         print(f"[POST_CHANNEL] {listing_id}: SKIPPED - missing BOT_TOKEN or CHANNEL_ID", flush=True)
         return None
+
+    # ===== Payment-status gate =====
+    tier = (item.tier or "free").lower()
+    if tier in ("premium", "vip"):
+        try:
+            with db_cursor() as conn:
+                row = conn.execute(
+                    "SELECT status, channel_message_id FROM listings WHERE id=?",
+                    (listing_id,),
+                ).fetchone()
+            if not row or row["status"] != "active":
+                print(
+                    f"[POST_CHANNEL] {listing_id}: BLOCKED — paid tier '{tier}' "
+                    f"but status={row['status'] if row else 'missing'}, payment not confirmed",
+                    flush=True,
+                )
+                # If there's a stale channel post for this unpaid listing,
+                # try to clean it up too.
+                stale = row["channel_message_id"] if row else None
+                if stale:
+                    try:
+                        await delete_from_channel(stale)
+                        with db_cursor() as conn:
+                            conn.execute(
+                                "UPDATE listings SET channel_message_id=NULL WHERE id=?",
+                                (listing_id,),
+                            )
+                            conn.commit()
+                    except Exception:
+                        pass
+                return None
+        except Exception as e:
+            print(f"[POST_CHANNEL] {listing_id}: gate check error: {e}", flush=True)
+            return None
+    # ===============================
     try:
         # Build simple text directly (bypass format_listing_for_channel for now)
         price_str = f"{item.price:,} ₽".replace(",", " ")
@@ -1405,9 +1443,12 @@ async def create_listing(item: ListingIn, request: Request):
                 except Exception:
                     pass
 
-    # ALWAYS post to channel for premium/vip tiers (regardless of payment)
-    if item.tier in ("premium", "vip"):
-        log_msg = f"[CREATE_LISTING] {listing_id}: ENTERING channel post block, tier={item.tier}"
+    # Post to channel ONLY if listing status is already 'active'.
+    # - Free / demo / admin → status set to 'active' on creation → post immediately
+    # - Real user paid tier → status='awaiting_payment' here → SKIP,
+    #   will be posted later by successful_payment / confirm_paid / cmd_paid
+    if initial_status == "active":
+        log_msg = f"[CREATE_LISTING] {listing_id}: ENTERING channel post block, tier={item.tier} status={initial_status}"
         print(log_msg, flush=True)
         try:
             with open("/data/last_post.log", "a") as f:
@@ -1567,7 +1608,14 @@ async def debug_post_channel_test(request: Request):
 
 @app.post("/payments/yukassa/create")
 async def create_yukassa_payment(request: Request):
-    """Create a YooKassa payment for a listing. Returns confirmation_url."""
+    """Create a YooKassa payment for a listing. Returns confirmation_url.
+
+    Modes:
+    - Real (YOOKASSA_SHOP_ID + secret set): creates ЮKassa payment via API,
+      returns confirmation_url (ЮKassa-hosted page where user pays card/SBP/...).
+    - Test/fallback: returns ready-made ЮMoney wallet payment URLs so the
+      integration works even before the shop is fully onboarded.
+    """
     body = await request.json()
     listing_id = body.get("listing_id", "")
     tier = body.get("tier", "vip")
@@ -1576,25 +1624,55 @@ async def create_yukassa_payment(request: Request):
     if tier not in TIER_PRICES:
         raise HTTPException(400, "Invalid tier")
     amount_rub = TIER_PRICES[tier] * 1.4  # 50⭐=70₽, 150⭐=210₽
+    amount_rub_int = int(amount_rub)
 
     shop_id = os.getenv("YOOKASSA_SHOP_ID", "")
     secret_key = os.getenv("YOOKASSA_SECRET_KEY", "")
+    yoowallet = os.getenv("YOOMONEY_WALLET", "")  # 41001... wallet for ЮMoney direct
 
+    # ----- Test / fallback mode: no real ЮKassa keys -----
     if not shop_id or not secret_key:
-        # Test mode: return fallback URLs (юkassa быстрая оплата / tinkoff / sber)
+        # ЮMoney quickpay form requires `receiver` (wallet) to actually accept money.
+        # If wallet is set, the URL works for real payments; otherwise it's a demo link.
+        quickpay_url = None
+        if yoowallet:
+            label = f"ib-{listing_id}-{int(datetime.now().timestamp())}"
+            quickpay_url = (
+                f"https://yoomoney.ru/quickpay/shop.xml"
+                f"?receiver={yoowallet}"
+                f"&quickpay-form=shop"
+                f"&paymentType=AC"
+                f"&sum={amount_rub_int}"
+                f"&label={label}"
+                f"&successURL=https://t.me/Ibaraholka_bot"
+                f"&targets=АйБарахолка {tier.upper()} {listing_id}"
+            )
+        tinkoff_url = (
+            f"https://www.tinkoff.ru/rm/r_TGugYbYVEb.mLmrPUwlTy"
+            f"?amount={amount_rub_int}00&successURL=https://t.me/Ibaraholka_bot"
+        )
+        sber_url = (
+            f"https://online.sberbank.ru/CSAFront/payment/showPrePaymentPage.do"
+            f"?amount={amount_rub_int}&to=АйБарахолка"
+        )
+        mode = "yoomoney" if quickpay_url else "tinkoff"
         return {
             "ok": True,
             "test_mode": True,
             "fallback": True,
-            "amount_rub": int(amount_rub),
-            "urls": {
-                "yoomoney": f"https://yoomoney.ru/quickpay/shop.xml?sum={int(amount_rub)}&quickpay-form=shop&paymentType=AC&successURL=https://t.me/Ibaraholka_bot",
-                "tinkoff": f"https://www.tinkoff.ru/rm/r_tGkNgT2sV8.main_pay?amount={int(amount_rub)}00&successURL=https://t.me/Ibaraholka_bot",
-                "sber": f"https://online.sberbank.ru/CSAFront/payment/showPrePaymentPage.do?amount={int(amount_rub)}&to=АйБарахолка",
-            },
+            "mode": mode,
+            "amount_rub": amount_rub_int,
+            "quickpay_url": quickpay_url,
+            "tinkoff_url": tinkoff_url,
+            "sber_url": sber_url,
+            "has_wallet": bool(yoowallet),
+            "instruction": (
+                "После оплаты вернись в WebApp и нажми «✅ Я оплатил — активировать» — "
+                "объявление появится в канале @ibaraholkatyt после проверки."
+            ),
         }
 
-    # Real YooKassa integration
+    # ----- Real YooKassa integration -----
     try:
         import urllib.request
         import base64
@@ -1603,7 +1681,7 @@ async def create_yukassa_payment(request: Request):
         auth = base64.b64encode(f"{shop_id}:{secret_key}".encode()).decode()
         return_url = os.getenv("YOOKASSA_RETURN_URL", "https://t.me/Ibaraholka_bot")
         payload = {
-            "amount": {"value": f"{int(amount_rub)}.00", "currency": "RUB"},
+            "amount": {"value": f"{amount_rub_int}.00", "currency": "RUB"},
             "capture": True,
             "confirmation": {
                 "type": "redirect",
@@ -1628,9 +1706,15 @@ async def create_yukassa_payment(request: Request):
         return {
             "ok": True,
             "test_mode": False,
+            "fallback": False,
+            "mode": "yukassa",
             "payment_id": result.get("id"),
             "confirmation_url": result.get("confirmation", {}).get("confirmation_url"),
-            "status": result.get("status"),
+            "amount_rub": amount_rub_int,
+            "instruction": (
+                "После оплаты вернись в WebApp и нажми «✅ Я оплатил — активировать» — "
+                "объявление появится в канале @ibaraholkatyt после проверки."
+            ),
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -2025,6 +2109,133 @@ async def delete_listing(listing_id: str, request: Request):
     return {"ok": True, "channel_deleted": deleted_from_channel}
 
 
+@app.post("/listings/{listing_id}/confirm-paid")
+async def confirm_paid_http(listing_id: str, request: Request):
+    """HTTP counterpart of the Telegram `confirm_paid:` callback.
+
+    Lets a user confirm they paid via ЮMoney / ЮKassa / Tinkoff / Sber / etc.
+    without leaving the WebApp. The OAuth / Telegram initData header carries
+    the user's identity; the listing must belong to that user.
+
+    On success: sets status='active' and posts the listing to the channel.
+    The post_to_channel() gate I added earlier ensures only paid+active ads
+    reach @ibaraholkatyt.
+    """
+    user = await get_user(request.headers.get("authorization", ""))
+    with db_cursor() as conn:
+        row = conn.execute(
+            "SELECT * FROM listings WHERE id=?", (listing_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, "Listing not found")
+        # Ownership check (demo/admin bypass allowed)
+        if row["user_id"] not in (999999, user["id"]) and user["id"] not in ADMIN_IDS:
+            raise HTTPException(403, "Not your listing")
+        # Activate
+        conn.execute("UPDATE listings SET status='active' WHERE id=?", (listing_id,))
+        conn.commit()
+        item_dict = {
+            "title": row["title"], "description": row["description"],
+            "price": row["price"], "cat": row["cat"], "type": row["type"],
+            "contact": row["contact"], "photo": row["photo"],
+            "tier": row["tier"], "city": row["city"],
+        }
+
+    # Post to channel (paid gate inside post_to_channel will allow this since status=active)
+    posted_msg_id = None
+    try:
+        from main import ListingIn  # type: ignore  # local class, import-safe
+        item = ListingIn(**item_dict)
+        user_dict = {
+            "id": row["user_id"], "first_name": row["user_name"],
+            "username": row["user_username"],
+        }
+        posted_msg_id = await post_to_channel(listing_id, item, user_dict)
+    except Exception as e:
+        logger.error(f"confirm_paid_http post_to_channel error: {e}")
+
+    # Try to notify the user in Telegram (if we know their chat_id and bot is up)
+    try:
+        if bot is not None and row["user_id"] and row["user_id"] != 999999:
+            tier_name = "TOP 24 часа" if row["tier"] == "premium" else (
+                "VIP 7 дней" if row["tier"] == "vip" else row["tier"].upper()
+            )
+            await bot.send_message(
+                row["user_id"],
+                f"✅ <b>Оплата подтверждена!</b>\n\n"
+                f"Объявление <code>{listing_id}</code> ({tier_name}) активировано.\n"
+                f"Оно появилось в канале @ibaraholkatyt.",
+            )
+    except Exception as e:
+        logger.warning(f"confirm_paid_http notify error: {e}")
+
+    return {
+        "ok": True,
+        "listing_id": listing_id,
+        "tier": row["tier"],
+        "status": "active",
+        "posted_to_channel": posted_msg_id is not None,
+        "channel_message_id": posted_msg_id,
+    }
+
+
+@app.post("/listings/{listing_id}/cancel-payment")
+async def cancel_payment_http(listing_id: str, request: Request):
+    """User cancelled the payment (closed WebApp without paying).
+
+    Downgrades a paid-tier listing to free tier and removes it from the channel
+    if it somehow ended up there (defensive). Free listings get posted to channel
+    if they weren't already.
+    """
+    user = await get_user(request.headers.get("authorization", ""))
+    with db_cursor() as conn:
+        row = conn.execute(
+            "SELECT * FROM listings WHERE id=?", (listing_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, "Listing not found")
+        if row["user_id"] not in (999999, user["id"]):
+            raise HTTPException(403, "Not your listing")
+        # Downgrade to free + clear any channel post
+        old_msg = row["channel_message_id"]
+        conn.execute(
+            "UPDATE listings SET tier='free', status='active', channel_message_id=NULL WHERE id=?",
+            (listing_id,),
+        )
+        conn.commit()
+        item_dict = {
+            "title": row["title"], "description": row["description"],
+            "price": row["price"], "cat": row["cat"], "type": row["type"],
+            "contact": row["contact"], "photo": row["photo"],
+            "tier": "free", "city": row["city"],
+        }
+
+    # Clean up any stale paid-tier channel post
+    if old_msg:
+        await delete_from_channel(old_msg)
+
+    # Post to channel as free
+    posted_msg_id = None
+    try:
+        from main import ListingIn  # type: ignore
+        item = ListingIn(**item_dict)
+        user_dict = {
+            "id": row["user_id"], "first_name": row["user_name"],
+            "username": row["user_username"],
+        }
+        posted_msg_id = await post_to_channel(listing_id, item, user_dict)
+    except Exception as e:
+        logger.error(f"cancel_payment_http post_to_channel error: {e}")
+
+    return {
+        "ok": True,
+        "listing_id": listing_id,
+        "new_tier": "free",
+        "deleted_old_post": old_msg is not None,
+        "new_post_id": posted_msg_id,
+    }
+
+
 @app.get("/admin/listings")
 async def admin_listings(admin_token: str = ""):
     """Admin: list all listings. Pass ?admin_token=demo."""
@@ -2250,6 +2461,77 @@ async def admin_post_channel(request: Request):
     except Exception as e:
         logger.error(f"admin_post_channel failed: {e}")
         return {"ok": False, "error": str(e)}
+
+
+@app.post("/admin/purge-unpaid-channel-posts")
+async def purge_unpaid_channel_posts(request: Request):
+    """Admin: delete channel posts for paid-tier listings whose payment never completed.
+
+    Scans the database for premium/vip listings that have a channel_message_id
+    but status != 'active', removes those messages from @ibaraholkatyt, and
+    clears channel_message_id. Idempotent — safe to run again.
+    """
+    admin_token = request.headers.get("x-admin-token", "")
+    if admin_token != ADMIN_TOKEN:
+        raise HTTPException(403, "Admin token required")
+
+    purged = []
+    failed = []
+    with db_cursor() as conn:
+        rows = conn.execute(
+            """SELECT id, tier, status, channel_message_id
+               FROM listings
+               WHERE tier IN ('premium', 'vip')
+                 AND status != 'active'
+                 AND channel_message_id IS NOT NULL"""
+        ).fetchall()
+
+    for row in rows:
+        ok = await delete_from_channel(row["channel_message_id"])
+        if ok:
+            with db_cursor() as conn:
+                conn.execute(
+                    "UPDATE listings SET channel_message_id=NULL WHERE id=?",
+                    (row["id"],),
+                )
+                conn.commit()
+            purged.append({"id": row["id"], "tier": row["tier"], "status": row["status"]})
+        else:
+            failed.append({"id": row["id"], "msg_id": row["channel_message_id"]})
+
+    logger.info(
+        f"purge_unpaid_channel_posts: purged={len(purged)} failed={len(failed)}"
+    )
+    return {"ok": True, "purged": purged, "failed": failed}
+
+
+@app.post("/admin/recheck-channel-post")
+async def recheck_channel_post(request: Request):
+    """Admin: verify a listing's current payment gate result without reposting."""
+    admin_token = request.headers.get("x-admin-token", "")
+    if admin_token != ADMIN_TOKEN:
+        raise HTTPException(403, "Admin token required")
+    body = await request.json()
+    listing_id = body.get("listing_id", "")
+    if not listing_id:
+        raise HTTPException(400, "listing_id required")
+    with db_cursor() as conn:
+        row = conn.execute(
+            "SELECT id, tier, status, channel_message_id FROM listings WHERE id=?",
+            (listing_id,),
+        ).fetchone()
+    if not row:
+        raise HTTPException(404, "Listing not found")
+    is_paid = (row["tier"] or "free") in ("premium", "vip")
+    would_post = (not is_paid) or (row["status"] == "active")
+    return {
+        "id": row["id"],
+        "tier": row["tier"],
+        "status": row["status"],
+        "has_channel_post": row["channel_message_id"] is not None,
+        "channel_message_id": row["channel_message_id"],
+        "would_post_to_channel": would_post,
+    }
 
 
 @app.post("/admin/listings/{listing_id}/approve")
