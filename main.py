@@ -4070,6 +4070,8 @@ async def match_subscribe(request: Request, user: Dict = Depends(get_user)):
             )
             conn.commit()
     except Exception as e:
+        import traceback
+        logger.error(f"match_subscribe create_failed: {e}\n{traceback.format_exc()}")
         return {"ok": False, "error": f"create_failed: {e}"}
 
     return {"ok": True, "subscription_id": sub_id, "filters": parsed,
