@@ -2731,6 +2731,30 @@ async def admin_ads(request: Request, x_admin_token: str = Header(None, alias="x
     }
 
 
+@app.get("/debug/list-ads")
+async def debug_list_ads():
+    """Temporary: dump ad_creatives contents via both code paths."""
+    import os
+    import psycopg2
+    url = os.getenv("DATABASE_URL", "").strip()
+    out = {"via_db_cursor": None, "via_psycopg2": None}
+    try:
+        with db_cursor() as conn:
+            rows = conn.execute("SELECT id, title, enabled, reward_coins, duration_sec FROM ad_creatives ORDER BY id").fetchall()
+            out["via_db_cursor"] = [{"id": r[0], "title": r[1], "enabled": r[2], "reward": r[3], "dur": r[4]} for r in rows]
+    except Exception as e:
+        out["via_db_cursor"] = {"err": str(e)}
+    try:
+        with psycopg2.connect(url, connect_timeout=10) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id, title, enabled, reward_coins, duration_sec FROM ad_creatives ORDER BY id")
+                rows = cur.fetchall()
+                out["via_psycopg2"] = [{"id": r[0], "title": r[1], "enabled": r[2], "reward": r[3], "dur": r[4]} for r in rows]
+    except Exception as e:
+        out["via_psycopg2"] = {"err": str(e)}
+    return out
+
+
 @app.post("/debug/create-vip-test")
 async def debug_create_vip_test(request: Request):
     """Debug: create VIP listing for Sasha (real user) for testing invoice flow."""
