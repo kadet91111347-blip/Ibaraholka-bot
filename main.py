@@ -5040,6 +5040,15 @@ async def saved_filters_delete(filter_id: int, user: Dict[str, Any] = Depends(ge
 async def profile_me(user: Dict[str, Any] = Depends(get_user)):
     """Профиль текущего юзера: мои объявления, баланс, подписки, сделки, реф-стата."""
     uid = int(user["id"])
+    try:
+        return await _profile_me_impl(uid, user)
+    except Exception as e:
+        import traceback
+        logger.error(f"/profile/me error: {e}\n{traceback.format_exc()}")
+        return {"ok": False, "error": "internal", "tb": traceback.format_exc()[-500:]}
+
+
+async def _profile_me_impl(uid: int, user: Dict[str, Any]):
     now = int(time.time())
     listing_cols = ["id", "user_id", "user_name", "user_username", "title", "description", "price", "cat", "type", "contact", "photo", "tier", "city", "status", "created", "expires_at", "channel_message_id", "paid_at"]
     sub_cols = ["id", "query", "cat", "max_price_rub", "city", "active", "is_free", "paid_until", "last_notified"]
@@ -5070,7 +5079,10 @@ async def profile_me(user: Dict[str, Any] = Depends(get_user)):
     bal_d = {"coins": 0, "total_earned": 0}
     if bal:
         bal_d = {"coins": int(bal["coins"]) if bal.get("coins") else 0, "total_earned": int(bal["total_earned"]) if bal.get("total_earned") else 0}
-    vip_until = int(up["vip_until"]) if up and up.get("vip_until") else 0
+    try:
+        vip_until = int(up["vip_until"]) if up and up.get("vip_until") else 0
+    except Exception:
+        vip_until = 0
     vip_active = vip_until > now
     my_total_n = int(my_total_n_row["n"]) if my_total_n_row else 0
     fav_n = int(fav_count_rows["n"]) if fav_count_rows else 0
@@ -5087,7 +5099,7 @@ async def profile_me(user: Dict[str, Any] = Depends(get_user)):
         "listings_active": len(my_active),
         "listings_total": my_total_n,
         "my_listings": my_active[:20],
-        "balance": {"coins": int(bal["coins"]) or 0, "total_earned": int(bal["total_earned"]) or 0},
+        "balance": {"coins": bal_d.get("coins", 0), "total_earned": bal_d.get("total_earned", 0)},
         "vip_until": vip_until,
         "vip_active": vip_active,
         "match_subs": {"active": active_subs, "total": len(subs), "items": subs},
