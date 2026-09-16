@@ -29,4 +29,5 @@ services:
       - key: TONCENTER_API_KEY
         sync: false
       - key: YOOMONEY_WALLET
+        sync: true
         value: "4100119629651495"
