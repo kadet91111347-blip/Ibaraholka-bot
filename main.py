@@ -2277,8 +2277,11 @@ def _seed_ads_if_empty():
     """Insert seed ads on first start (idempotent)."""
     now = int(datetime.now().timestamp() * 1000)
     with db_cursor() as conn:
-        cur = conn.execute("SELECT COUNT(*) FROM ad_creatives")
-        if cur.fetchone()[0] == 0:
+        cur = conn.execute("SELECT COUNT(*) AS c FROM ad_creatives")
+        row = cur.fetchone()
+        # Support both psycopg2 dict-style and sqlite3 tuple-style
+        count = row["c"] if isinstance(row, dict) and "c" in row else (row["c"] if isinstance(row, dict) else row[0])
+        if count == 0:
             for i, ad in enumerate(SEED_AD_CREATIVES, start=1):
                 conn.execute(
                     "INSERT INTO ad_creatives (id, title, description, image_url, click_url, reward_coins, duration_sec, enabled, weight, created) "
