@@ -2755,6 +2755,20 @@ async def debug_list_ads():
     return out
 
 
+@app.get("/debug/run-seed")
+async def debug_run_seed():
+    """Force-run lazy seed and return result/error."""
+    import traceback
+    try:
+        _seed_ads_if_empty()
+        # verify
+        with db_cursor() as conn:
+            rows = conn.execute("SELECT id, title, enabled FROM ad_creatives ORDER BY id").fetchall()
+        return {"ok": True, "rows": [{"id": r[0], "title": r[1], "enabled": r[2]} for r in rows]}
+    except Exception as e:
+        return {"ok": False, "err": str(e), "tb": traceback.format_exc()[:1500]}
+
+
 @app.post("/debug/create-vip-test")
 async def debug_create_vip_test(request: Request):
     """Debug: create VIP listing for Sasha (real user) for testing invoice flow."""
