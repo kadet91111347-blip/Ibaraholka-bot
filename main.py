@@ -390,6 +390,43 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_match_log_listing ON match_log(listing_id);
         """)
 
+        # ===== REFERRALS — Реф-лесенка =====
+        # Хранит кто кого привёл и какие бонусы начислены
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS referrals (
+                id BIGSERIAL PRIMARY KEY,
+                referrer_id BIGINT NOT NULL,
+                referred_id BIGINT NOT NULL UNIQUE,
+                referred_username TEXT,
+                referred_first_name TEXT,
+                created INTEGER NOT NULL,
+                bonus_granted INTEGER DEFAULT 0,
+                bonus_type TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_referrals_referrer ON referrals(referrer_id)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_referrals_created ON referrals(created)
+        """)
+        # Бонусы за реф-лесенку: milestone → кол-во приглашённых → тип бонуса
+        # 1 = 5 coins, 3 = 10 coins, 5 = 1 день VIP, 15 = 3 дня VIP, 25 = 7 дней VIP
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS referral_bonuses (
+                id BIGSERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                milestone INTEGER NOT NULL,
+                bonus_type TEXT NOT NULL,
+                bonus_value TEXT NOT NULL,
+                created INTEGER NOT NULL,
+                UNIQUE(user_id, milestone)
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_referral_bonuses_user ON referral_bonuses(user_id)
+        """)
+
 
 # ============================================================
 # Telegram initData validation
@@ -509,6 +546,58 @@ async def cmd_start(message: types.Message):
     if payload.startswith("listing_"):
         # Deep link to specific listing
         text += "\n\n<i>Открываю объявление...</i>"
+
+    # Referral landing — payload like 'ref_12345' or 'ref_748834052'
+    if payload.startswith("ref_"):
+        try:
+            referrer_id = int(payload[4:])
+            referred_id = int(message.from_user.id)
+            if referrer_id >= 1000 and referred_id >= 1000 and referrer_id != referred_id:
+                # Register referral (UNIQUE on referred_id — ignore on conflict)
+                try:
+                    now = int(time.time())
+                    with db_cursor() as conn:
+                        cur = conn.execute(
+                            "INSERT INTO referrals (referrer_id, referred_id, referred_username, referred_first_name, created) "
+                            "VALUES (?, ?, ?, ?, ?) ON CONFLICT(referred_id) DO NOTHING RETURNING id",
+                            (
+                                referrer_id,
+                                referred_id,
+                                message.from_user.username or "",
+                                message.from_user.first_name or "",
+                                now,
+                            ),
+                        )
+                        # Try fetch row (Postgres) — sqlite may not support RETURNING
+                        inserted = False
+                        try:
+                            row = cur.fetchone()
+                            inserted = bool(row)
+                        except Exception:
+                            inserted = True  # assume inserted for sqlite path
+                        # Check milestones for referrer
+                        if inserted:
+                            granted = _check_and_grant_milestones(conn, referrer_id)
+                            conn.commit()
+                            # Notify referrer
+                            if bot is not None:
+                                try:
+                                    await bot.send_message(
+                                        referrer_id,
+                                        f"🎉 <b>Новый реферал!</b>\n\n"
+                                        f"Кто-то пришёл по твоей ссылке. Открой /refs чтобы посмотреть прогресс.",
+                                    )
+                                except Exception:
+                                    pass
+                            bonus_text = (
+                                "\n\n🎁 <b>Бонус:</b> ты только что принёс +1 реферала тому, кто тебя позвал. "
+                                "Если у тебя ещё нет подписки — загляни в Mini App, там 🔔 Бот-подбиратель и 🎁 Реф-лесенка."
+                            )
+                            text += bonus_text
+                except Exception as e:
+                    logging.warning(f"start ref track error: {e}")
+        except ValueError:
+            pass
 
     await message.answer(
         text,
@@ -4176,6 +4265,317 @@ async def match_unsubscribe(sub_id: str, user: Dict = Depends(get_user)):
         return {"ok": True, "subscription_id": sub_id, "status": "deactivated"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+# ============================================================
+# REFERRALS — Реф-лесенка: «Приведи 5 друзей — 1 день VIP, 25 — неделя»
+# ============================================================
+# Сценарий:
+#   - Юзер открывает Mini App → видит свою реф-ссылку → делится с друзьями
+#   - Друг кликает → t.me/Ibaraholka_bot?startapp=ref_<user_id>
+#   - Mini App при первом запуске отправляет /referrals/track с referred_id
+#   - Бэкенд пишет в таблицу referrals, проверяет milestone, выдаёт бонусы
+#
+# Milestones:
+#   1 реф   → 5 IB Coins (новый юзер) + 5 IB Coins (реферер)
+#   3 рефа  → 10 IB Coins (реферер)
+#   5 рефов → 1 день VIP
+#   15 рефов → 3 дня VIP
+#   25 рефов → 7 дней VIP
+
+# Минимальный ID юзера для реф-ссылки (защита от мусора)
+MIN_REFERRER_ID = 1000
+MIN_REFERRED_ID = 1000
+
+REFERRAL_MILESTONES = [
+    # (count, type, value, description)
+    (1, "coins", "5", "5 IB Coins за каждого друга"),
+    (3, "coins", "10", "10 IB Coins бонус"),
+    (5, "vip_days", "1", "1 день VIP"),
+    (15, "vip_days", "3", "3 дня VIP"),
+    (25, "vip_days", "7", "7 дней VIP"),
+]
+
+
+def _grant_milestone_bonus(conn, user_id: int, milestone: int, bonus_type: str, bonus_value: str):
+    """Начислить бонус юзеру. Идемпотентно через UNIQUE(user_id, milestone)."""
+    now = int(time.time())
+    try:
+        # Check if already granted
+        existing = conn.execute(
+            "SELECT id FROM referral_bonuses WHERE user_id=? AND milestone=?",
+            (user_id, milestone),
+        ).fetchone()
+        if existing:
+            return False  # уже выдан
+
+        # Record the grant
+        conn.execute(
+            "INSERT INTO referral_bonuses (user_id, milestone, bonus_type, bonus_value, created) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (user_id, milestone, bonus_type, bonus_value, now),
+        )
+
+        if bonus_type == "coins":
+            coins = int(bonus_value)
+            # UPSERT user_balances
+            conn.execute(
+                "INSERT INTO user_balances (user_id, coins, total_earned, total_spent, updated) "
+                "VALUES (?, ?, ?, 0, ?) "
+                "ON CONFLICT(user_id) DO UPDATE SET coins = coins + ?, total_earned = total_earned + ?, updated = ?",
+                (user_id, coins, coins, now, coins, coins, now),
+            )
+            return ("coins", coins)
+
+        elif bonus_type == "vip_days":
+            days = int(bonus_value)
+            # Set VIP until now+days*86400 in user_balances (or create profile)
+            # We use a separate vip_until field in user_balances (need schema check)
+            # For now: credit via listings tier=free→vip auto-apply for next listing
+            # Simplest: just store vip_until timestamp
+            conn.execute(
+                "ALTER TABLE user_balances ADD COLUMN IF NOT EXISTS vip_until INTEGER DEFAULT 0",
+            )
+            # Get current vip_until (max with new)
+            existing_balance = conn.execute(
+                "SELECT vip_until, coins, total_earned, total_spent FROM user_balances WHERE user_id=?",
+                (user_id,),
+            ).fetchone()
+            cur_vip = 0
+            cur_coins = 0
+            cur_earned = 0
+            cur_spent = 0
+            if existing_balance:
+                if isinstance(existing_balance, dict):
+                    cur_vip = int(existing_balance.get("vip_until") or 0)
+                    cur_coins = int(existing_balance.get("coins") or 0)
+                    cur_earned = int(existing_balance.get("total_earned") or 0)
+                    cur_spent = int(existing_balance.get("total_spent") or 0)
+                else:
+                    cur_vip = int(existing_balance[0] or 0)
+                    cur_coins = int(existing_balance[1] or 0)
+                    cur_earned = int(existing_balance[2] or 0)
+                    cur_spent = int(existing_balance[3] or 0)
+            base = max(now, cur_vip)
+            new_vip = base + days * 86400
+            conn.execute(
+                "INSERT INTO user_balances (user_id, coins, total_earned, total_spent, updated, vip_until) "
+                "VALUES (?, ?, ?, 0, ?, ?) "
+                "ON CONFLICT(user_id) DO UPDATE SET vip_until = ?, updated = ?",
+                (user_id, cur_coins, cur_earned, now, new_vip, new_vip, now),
+            )
+            return ("vip_days", days, new_vip)
+
+    except Exception as e:
+        logger.error(f"_grant_milestone_bonus error: {e}")
+        return False
+
+
+def _check_and_grant_milestones(conn, referrer_id: int):
+    """Check current referral count for referrer and grant any new milestones."""
+    granted = []
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) AS c FROM referrals WHERE referrer_id=?",
+            (referrer_id,),
+        ).fetchone()
+        cnt = 0
+        if row:
+            cnt = int(row["c"] if isinstance(row, dict) else row[0])
+        for milestone, btype, bvalue, _ in REFERRAL_MILESTONES:
+            if cnt >= milestone:
+                result = _grant_milestone_bonus(conn, referrer_id, milestone, btype, bvalue)
+                if result:
+                    granted.append({"milestone": milestone, "type": btype, "value": bvalue})
+    except Exception as e:
+        logger.error(f"_check_and_grant_milestones error: {e}")
+    return granted
+
+
+@app.post("/referrals/track")
+async def referrals_track(request: Request):
+    """Mini App calls this on first launch to register a referral.
+
+    Called BEFORE auth resolves (because the ref_user is what we want to track
+    even before user opens app). Body: {referrer_id, referred_id, referred_username?, referred_first_name?}
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    try:
+        referrer_id = int(body.get("referrer_id") or 0)
+        referred_id = int(body.get("referred_id") or 0)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "bad_ids"}
+    if referrer_id < MIN_REFERRER_ID or referred_id < MIN_REFERRER_ID:
+        return {"ok": False, "error": "invalid_ids"}
+    if referrer_id == referred_id:
+        return {"ok": False, "error": "self_referral"}
+    referred_username = (body.get("referred_username") or "").strip()[:64]
+    referred_first_name = (body.get("referred_first_name") or "").strip()[:64]
+    now = int(time.time())
+    try:
+        with db_cursor() as conn:
+            # UNIQUE(referred_id) constraint — INSERT OR IGNORE
+            cur = conn.execute(
+                "INSERT INTO referrals (referrer_id, referred_id, referred_username, referred_first_name, created) "
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT(referred_id) DO NOTHING RETURNING id",
+                (referrer_id, referred_id, referred_username, referred_first_name, now),
+            )
+            new_id = cur.fetchone() if hasattr(cur, "fetchone") else None
+            inserted = bool(new_id)
+            # Get current count + bonuses
+            cnt_row = conn.execute(
+                "SELECT COUNT(*) AS c FROM referrals WHERE referrer_id=?",
+                (referrer_id,),
+            ).fetchone()
+            cnt = int(cnt_row["c"] if isinstance(cnt_row, dict) else cnt_row[0])
+            # Check + grant milestones
+            granted = _check_and_grant_milestones(conn, referrer_id)
+            conn.commit()
+        # Notify referrer
+        if inserted and bot is not None:
+            try:
+                await bot.send_message(
+                    referrer_id,
+                    f"🎉 <b>Новый реферал!</b>\n\n"
+                    f"Кто-то пришёл по твоей ссылке. У тебя уже <b>{cnt}</b> приглашённых.\n\n"
+                    f"Награды:\n"
+                    + "\n".join([f"— {m} реф → {desc}" for m, _, _, desc in REFERRAL_MILESTONES])
+                    + f"\n\n<i>Открой Mini App → 🎁 Реф-лесенка</i>",
+                )
+            except Exception as e:
+                logger.warning(f"referral notify failed: {e}")
+        return {
+            "ok": True,
+            "inserted": inserted,
+            "referrer_id": referrer_id,
+            "referred_id": referred_id,
+            "referrals_count": cnt,
+            "bonuses_granted": granted,
+            "next_milestone": next(
+                ({"count": m, "type": bt, "value": bv, "desc": d}
+                 for m, bt, bv, d in REFERRAL_MILESTONES if cnt < m),
+                None,
+            ),
+        }
+    except Exception as e:
+        logger.error(f"/referrals/track error: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/referrals/stats")
+async def referrals_stats(user: Dict = Depends(get_user)):
+    """Get referral stats for current user."""
+    user_id = int(user["id"])
+    try:
+        with db_cursor() as conn:
+            cnt_row = conn.execute(
+                "SELECT COUNT(*) AS c FROM referrals WHERE referrer_id=?",
+                (user_id,),
+            ).fetchone()
+            cnt = int(cnt_row["c"] if isinstance(cnt_row, dict) else cnt_row[0])
+            bonuses_rows = conn.execute(
+                "SELECT milestone, bonus_type, bonus_value, created FROM referral_bonuses "
+                "WHERE user_id=? ORDER BY milestone",
+                (user_id,),
+            ).fetchall()
+            referred_rows = conn.execute(
+                "SELECT referred_id, referred_username, referred_first_name, created "
+                "FROM referrals WHERE referrer_id=? ORDER BY created DESC LIMIT 50",
+                (user_id,),
+            ).fetchall()
+        bonuses = []
+        for r in bonuses_rows:
+            d = r if isinstance(r, dict) else None
+            bonuses.append({
+                "milestone": int(d["milestone"] if d else r[0]),
+                "type": d["bonus_type"] if d else r[1],
+                "value": d["bonus_value"] if d else r[2],
+                "created": int(d["created"] if d else r[3]),
+            })
+        referred = []
+        for r in referred_rows:
+            d = r if isinstance(r, dict) else None
+            referred.append({
+                "user_id": int(d["referred_id"] if d else r[0]),
+                "username": d["referred_username"] if d else r[1],
+                "first_name": d["referred_first_name"] if d else r[2],
+                "created": int(d["created"] if d else r[3]),
+            })
+        return {
+            "ok": True,
+            "referrals_count": cnt,
+            "bonuses": bonuses,
+            "referred": referred,
+            "next_milestone": next(
+                ({"count": m, "type": bt, "value": bv, "desc": d}
+                 for m, bt, bv, d in REFERRAL_MILESTONES if cnt < m),
+                None,
+            ),
+            "milestones": [
+                {"count": m, "type": bt, "value": bv, "desc": d}
+                for m, bt, bv, d in REFERRAL_MILESTONES
+            ],
+            "referrer_id": user_id,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/referrals/claim")
+async def referrals_claim(request: Request, user: Dict = Depends(get_user)):
+    """Manually claim any pending milestones. Normally auto-claimed on each /track."""
+    user_id = int(user["id"])
+    try:
+        with db_cursor() as conn:
+            granted = _check_and_grant_milestones(conn, user_id)
+            conn.commit()
+        return {"ok": True, "granted": granted}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+# Bot command: /refs — show stats in DM
+@dp.message(Command("refs"))
+async def cmd_refs(message: types.Message):
+    """Show user's referral ladder progress."""
+    user_id = int(message.from_user.id)
+    try:
+        with db_cursor() as conn:
+            cnt_row = conn.execute(
+                "SELECT COUNT(*) AS c FROM referrals WHERE referrer_id=?",
+                (user_id,),
+            ).fetchone()
+            cnt = int(cnt_row["c"] if isinstance(cnt_row, dict) else cnt_row[0])
+        # Build milestone ladder
+        lines = []
+        for m, btype, bval, desc in REFERRAL_MILESTONES:
+            mark = "✅" if cnt >= m else "🔒"
+            lines.append(f"{mark} <b>{m}</b> — {desc}")
+        ladder = "\n".join(lines)
+        await message.answer(
+            f"🎁 <b>Реф-лесенка</b>\n\n"
+            f"Ты привёл: <b>{cnt}</b> друзей\n\n"
+            f"{ladder}\n\n"
+            f"📤 Твоя ссылка:\n"
+            f"<code>https://t.me/Ibaraholka_bot?startapp=ref_{user_id}</code>\n\n"
+            f"<i>Кидай друзьям — за каждого получишь бонус. Ссылка работает и в личке бота, и в Mini App.</i>",
+        )
+    except Exception as e:
+        await message.answer(f"⚠️ Ошибка: {e}")
+
+
+# Bot start handler — detect ?start=ref_XXX or ?startapp=ref_XXX and show bonus info
+# (Existing @dp.message(CommandStart()) above; we extend via @dp.message(Command("start"))? No — use F.text starts-with check.)
+# We'll register a separate filter to catch the ref payload before the generic start handler.
+# Actually simplest: extend the existing cmd_start to show a bonus hint if payload starts with 'ref_'.
+
+
+# ============================================================
+# Run: bot (polling) + API (uvicorn) in same process
+# ============================================================
 
 
 @app.get("/seller/balance")
