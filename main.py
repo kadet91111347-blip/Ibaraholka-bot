@@ -3861,22 +3861,26 @@ def _match_listing_to_subscription(filters: Dict[str, Any], listing: Dict[str, A
     """Pure-Python matcher (no LLM). Returns True if listing matches filters."""
     # Cat
     if filters.get("cat") and listing.get("cat") != filters["cat"]:
+        logger.info(f"matcher: cat mismatch filters={filters.get('cat')!r} listing={listing.get('cat')!r}")
         return False
     # Price
     if filters.get("max_price") is not None:
         price = int(listing.get("price") or 0)
         if price > filters["max_price"]:
+            logger.info(f"matcher: price {price} > max {filters['max_price']}")
             return False
     # City (substring match — listing.city may have district)
     if filters.get("city"):
         fc = filters["city"].lower()
         lc = (listing.get("city") or "").lower()
         if fc not in lc and lc not in fc:
+            logger.info(f"matcher: city mismatch filters.city={fc!r} listing.city={lc!r}")
             return False
     # Color — check title + description
     if filters.get("color"):
         text = ((listing.get("title") or "") + " " + (listing.get("description") or "")).lower()
         if filters["color"].lower() not in text:
+            logger.info(f"matcher: color {filters['color']!r} not in text")
             return False
     # Keywords: require ALL keywords to appear in title+description (case-insensitive)
     keywords = filters.get("keywords") or []
@@ -3884,6 +3888,7 @@ def _match_listing_to_subscription(filters: Dict[str, Any], listing: Dict[str, A
         text = ((listing.get("title") or "") + " " + (listing.get("description") or "")).lower()
         for kw in keywords:
             if kw not in text:
+                logger.info(f"matcher: keyword {kw!r} not in text {text!r}")
                 return False
     return True
 
