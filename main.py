@@ -2767,7 +2767,17 @@ async def debug_run_seed():
         # verify
         with db_cursor() as conn:
             rows = conn.execute("SELECT id, title, enabled FROM ad_creatives ORDER BY id").fetchall()
-        return {"ok": True, "rows": [{"id": r[0], "title": r[1], "enabled": r[2]} for r in rows]}
+        def _g(r, k):
+            return r[k] if isinstance(r, dict) else r[0]
+        out = []
+        for r in rows:
+            d = r if isinstance(r, dict) else None
+            out.append({
+                "id": d["id"] if d else r[0],
+                "title": d["title"] if d else r[1],
+                "enabled": d["enabled"] if d else r[2],
+            })
+        return {"ok": True, "rows": out}
     except Exception as e:
         return {"ok": False, "err": str(e), "tb": traceback.format_exc()[:1500]}
 
