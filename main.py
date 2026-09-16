@@ -1860,6 +1860,14 @@ async def create_yukassa_payment(request: Request):
 
 @app.post("/payments/tinkoff/notify")
 async def tinkoff_notify(request: Request):
+    import traceback
+    try:
+        return await _tinkoff_notify_impl(request)
+    except Exception as e:
+        return {"ok": False, "error": f"unhandled:{type(e).__name__}:{e}", "trace": traceback.format_exc()[-1500:]}
+
+
+async def _tinkoff_notify_impl(request: Request):
     """User-driven Tinkoff payment confirmation.
 
     Flow (no merchant API available for solo/self-employed):
