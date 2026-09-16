@@ -2272,22 +2272,6 @@ SEED_AD_CREATIVES = [
 ]
 
 
-def _seed_ads_if_empty():
-    """Insert seed ads on first start (idempotent)."""
-    now = int(datetime.now().timestamp() * 1000)
-    with db_cursor() as conn:
-        cur = conn.execute("SELECT COUNT(*) FROM ad_creatives")
-        if cur.fetchone()[0] == 0:
-            for i, ad in enumerate(SEED_AD_CREATIVES, start=1):
-                conn.execute(
-                    "INSERT INTO ad_creatives (id, title, description, image_url, click_url, reward_coins, duration_sec, enabled, weight, created) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1, ?)",
-                    (i, ad["title"], ad["description"], ad["image_url"], ad["click_url"],
-                     ad["reward_coins"], ad["duration_sec"], now),
-                )
-            conn.commit()
-
-
 # Lazy seed: called inside endpoint, after init_db()
 def _seed_ads_if_empty():
     """Insert seed ads on first start (idempotent)."""
@@ -2305,6 +2289,106 @@ def _seed_ads_if_empty():
             conn.commit()
 
 
+def _credit_due_ads(conn, user_id: int, now_ms: int) -> int:
+    """Auto-credit all 'due' ad views for user (created + duration_sec*1000 <= now_ms).
+
+    Returns total coins credited this call. Used by /user/balance, /ads/next,
+    /payments/coins/pay — guarantees coins arrive even if user closed the app.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT v.id, v.ad_id, v.coins_credited "
+            "FROM ad_views v WHERE v.user_id=? AND v.completed=0 "
+            "AND EXISTS (SELECT 1 FROM ad_creatives a WHERE a.id=v.ad_id AND v.created + a.duration_sec*1000 <= ?)",
+            (user_id, now_ms),
+        ).fetchall()
+    except Exception as e:
+        logging.warning("_credit_due_ads query failed: %s", e)
+        return 0
+    if not rows:
+        return 0
+    total = 0
+    credited_ad_ids = []
+    for view_id, ad_id, coins_credited in rows:
+        total += int(coins_credited or 0)
+        credited_ad_ids.append(int(ad_id))
+        conn.execute(
+            "UPDATE ad_views SET completed=1 WHERE id=?",
+            (view_id,),
+        )
+    if total > 0:
+        bal = conn.execute(
+            "SELECT coins, total_earned FROM user_balances WHERE user_id=?",
+            (user_id,),
+        ).fetchone()
+        if bal:
+            new_coins = (bal[0] or 0) + total
+            new_earned = (bal[1] or 0) + total
+            conn.execute(
+                "UPDATE user_balances SET coins=?, total_earned=?, updated=? WHERE user_id=?",
+                (new_coins, new_earned, now_ms, user_id),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO user_balances (user_id, coins, total_earned, total_spent, updated) "
+                "VALUES (?, ?, ?, 0, ?)",
+                (user_id, total, total, now_ms),
+            )
+        for ad_id in credited_ad_ids:
+            conn.execute(
+                "UPDATE ad_creatives SET shown_count = shown_count + 1 WHERE id=?",
+                (ad_id,),
+            )
+    return total
+
+
+@app.post("/ads/start")
+async def ads_start(request: Request, user: Dict = Depends(get_user)):
+    """User started watching an ad. Records a PENDING view (completed=0).
+
+    Server auto-credits when duration_sec passes — client doesn't have to
+    stay on the page. Just check /user/balance later.
+    """
+    user_id = int(user["id"])
+    now_ms = int(datetime.now().timestamp() * 1000)
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "JSON body required")
+    ad_id = int(body.get("ad_id", 0))
+    if not ad_id:
+        raise HTTPException(400, "ad_id required")
+
+    with db_cursor() as conn:
+        # Cancel any prior pending views (user clicked again on a new ad)
+        conn.execute(
+            "UPDATE ad_views SET completed=1, coins_credited=0 WHERE user_id=? AND completed=0",
+            (user_id,),
+        )
+        ad_row = conn.execute(
+            "SELECT reward_coins, duration_sec, enabled FROM ad_creatives WHERE id=?",
+            (ad_id,),
+        ).fetchone()
+        if not ad_row or not ad_row[2]:
+            return {"ok": False, "error": "ad_disabled"}
+        reward, duration_sec, _ = ad_row
+        view_id = int(now_ms) ^ user_id
+        conn.execute(
+            "INSERT INTO ad_views (id, user_id, ad_id, coins_credited, created, completed) "
+            "VALUES (?, ?, ?, ?, ?, 0)",
+            (view_id, user_id, ad_id, reward, now_ms),
+        )
+        conn.commit()
+    return {
+        "ok": True,
+        "ad_id": ad_id,
+        "duration_sec": duration_sec,
+        "reward": reward,
+        "pending_until_ts": now_ms + duration_sec * 1000,
+        "message": f"+{reward} ⭐ начислится через {duration_sec} сек автоматически",
+    }
+
+
 @app.get("/ads/next")
 async def ads_next(user: Dict = Depends(get_user)):
     """Return the next ad creative for this user. Anti-fraud: refuses if last view was < 30s ago."""
@@ -2316,6 +2400,10 @@ async def ads_next(user: Dict = Depends(get_user)):
     now_ms = int(datetime.now().timestamp() * 1000)
 
     with db_cursor() as conn:
+        # Auto-credit any ads whose duration has already passed (server-side timer)
+        credited_now = _credit_due_ads(conn, user_id, now_ms)
+        if credited_now > 0:
+            conn.commit()
         # Anti-fraud: последний просмотр
         last = conn.execute(
             "SELECT created FROM ad_views WHERE user_id=? ORDER BY created DESC LIMIT 1",
@@ -2462,7 +2550,12 @@ async def ads_click(request: Request, user: Dict = Depends(get_user)):
 async def user_balance(user: Dict = Depends(get_user)):
     """Return current IB Coins balance + lifetime totals."""
     user_id = int(user["id"])
+    now_ms = int(datetime.now().timestamp() * 1000)
     with db_cursor() as conn:
+        # Auto-credit any ads whose duration has already passed
+        credited_now = _credit_due_ads(conn, user_id, now_ms)
+        if credited_now > 0:
+            conn.commit()
         bal = conn.execute(
             "SELECT coins, total_earned, total_spent, updated FROM user_balances WHERE user_id=?",
             (user_id,),
@@ -2474,8 +2567,9 @@ async def user_balance(user: Dict = Depends(get_user)):
             "total_earned": bal[1],
             "total_spent": bal[2],
             "updated": bal[3],
+            "credited_now": credited_now,
         }
-    return {"ok": True, "coins": 0, "total_earned": 0, "total_spent": 0, "updated": 0}
+    return {"ok": True, "coins": 0, "total_earned": 0, "total_spent": 0, "updated": 0, "credited_now": credited_now}
 
 
 @app.post("/payments/coins/pay")
@@ -2501,6 +2595,10 @@ async def payments_coins_pay(request: Request, user: Dict = Depends(get_user)):
         raise HTTPException(400, "listing_id required")
 
     with db_cursor() as conn:
+        # Auto-credit any ads whose duration has already passed
+        credited_now = _credit_due_ads(conn, user_id, now_ms)
+        if credited_now > 0:
+            conn.commit()
         # Lock listing row
         row = conn.execute(
             "SELECT id, user_id, tier, status, title, price FROM listings WHERE id=?",
