@@ -970,8 +970,13 @@ async def cmd_find(message: types.Message):
                 "SELECT COUNT(*) AS c, SUM(is_free) AS f FROM match_subscriptions WHERE user_id=? AND active=1",
                 (user_id,),
             ).fetchone()
-            cnt = int(row["c"]) if (row and row.get("c") is not None) else 0
-            free_cnt = int(row["f"]) if (row and row.get("f") is not None) else 0
+            def _gcnt(r, k, idx):
+                if r is None: return 0
+                if isinstance(r, dict): return r.get(k) or 0
+                try: return r[k]
+                except (KeyError, IndexError): return r[idx] if idx < len(r) else 0
+            cnt = int(_gcnt(row, "c", 0) or 0)
+            free_cnt = int(_gcnt(row, "f", 1) or 0)
     except Exception:
         cnt = 0
         free_cnt = 0
@@ -4004,8 +4009,13 @@ async def match_subscribe(request: Request, user: Dict = Depends(get_user)):
                 "SELECT COUNT(*) AS c, SUM(is_free) AS f FROM match_subscriptions WHERE user_id=? AND active=1",
                 (user_id,),
             ).fetchone()
-            cnt = int(row["c"]) if (row and row.get("c") is not None) else 0
-            free_cnt = int(row["f"]) if (row and row.get("f") is not None) else 0
+            def _gcnt(r, k, idx):
+                if r is None: return 0
+                if isinstance(r, dict): return r.get(k) or 0
+                try: return r[k]
+                except (KeyError, IndexError): return r[idx] if idx < len(r) else 0
+            cnt = int(_gcnt(row, "c", 0) or 0)
+            free_cnt = int(_gcnt(row, "f", 1) or 0)
     except Exception:
         cnt = 0
         free_cnt = 0
