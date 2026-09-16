@@ -1068,6 +1068,7 @@ async def post_to_channel(listing_id: str, item: ListingIn, user: Dict[str, Any]
         payload = {
             "chat_id": str(CHANNEL_ID),
             "text": text,
+            "parse_mode": "HTML",
             "disable_web_page_preview": "true",
         }
         data = urllib.parse.urlencode(payload).encode()
@@ -1471,6 +1472,7 @@ async def create_listing(item: ListingIn, request: Request):
             payload = {
                 "chat_id": str(CHANNEL_ID),
                 "text": text,
+                "parse_mode": "HTML",
                 "disable_web_page_preview": "true",
             }
             data = urllib.parse.urlencode(payload).encode()
