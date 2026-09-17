@@ -110,7 +110,7 @@ a{color:inherit;text-decoration:none}
 </style>
 </head>
 <body>
-<div id="vmark" style="background:linear-gradient(90deg,#22C55E,#16A34A);padding:10px;text-align:center;font-size:13px;font-weight:700;color:#0B0B0F">v52 · 00:10 · прямой onclick на FAB, всегда работает → модалка «открой через бота» + крупная кнопка в форме</div>
+<div id="vmark" style="background:linear-gradient(90deg,#22C55E,#16A34A);padding:10px;text-align:center;font-size:13px;font-weight:700;color:#0B0B0F">v52 · 00:25 · inline onclick на FAB всегда работает</div>
 <script>
 setTimeout(()=>{const m=document.getElementById('vmark');if(m&&location.search.indexOf('keep')<0)m.style.display='none';},12000);
 </script>
@@ -148,7 +148,7 @@ if(typeof window.Telegram==='undefined'||!window.Telegram.WebApp||!window.Telegr
 <nav class="nav">
   <div class="nav-i active" data-t="feed"><div class="nav-i-emoji">🏠</div><div>Лента</div></div>
   <div class="nav-i" data-t="profile"><div class="nav-i-emoji">👤</div><div>Профиль</div></div>
-  <div class="nav-i nav-i-center" data-t="sell" onclick="try{try{haptic&&haptic('medium');}catch(_){};openSellForm(true);}catch(e){console.error('[sell] click error',e);alert('Ошибка: '+e.message);}" style="background:linear-gradient(135deg,#FF8A3D,#FF4D00);color:#0B0B0F;margin-top:-22px;border-radius:50%;width:56px;height:56px;display:flex;flex-direction:column;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(255,138,61,0.4);font-size:24px;font-weight:700;border:3px solid #0B0B0F;cursor:pointer">+</div>
+  <div class="nav-i nav-i-center" data-t="sell" onclick="try{haptic&&haptic('medium');openSellForm(true);}catch(e){console.error('[sell]',e);alert('Ошибка: '+e.message);}" style="background:linear-gradient(135deg,#FF8A3D,#FF4D00);color:#0B0B0F;margin-top:-22px;border-radius:50%;width:56px;height:56px;display:flex;flex-direction:column;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(255,138,61,0.4);font-size:24px;font-weight:700;border:3px solid #0B0B0F;cursor:pointer">+</div>
   <div class="nav-i" data-t="match"><div class="nav-i-emoji">🔔</div><div>Подбор</div></div>
   <div class="nav-i" data-t="refs"><div class="nav-i-emoji">🎁</div><div>Реф</div></div>
 </nav>
@@ -182,16 +182,9 @@ function showOpenViaBotModal(){
     '<p style="font-size:14px;color:#a1a1aa;line-height:1.5;margin-bottom:14px">Ты открыл Mini App <b>не через Telegram-бота</b>, поэтому приложение не знает, кто ты, и не может опубликовать.</p>'+
     '<div style="background:#18181b;border:1px solid #27272a;border-radius:12px;padding:14px;margin-bottom:16px;font-size:13px;line-height:1.6"><b>Как исправить за 10 секунд:</b><br>1. Закрой это окно<br>2. Открой <b>@Ibaraholka_bot</b><br>3. Нажми <b>≡ Menu → 🚀 Запустить</b></div>'+
     '<a href="'+url+'" target="_blank" rel="noopener" class="btn-cta" style="display:block;background:linear-gradient(135deg,#FF8A3D,#FF4D00);color:#0B0B0F;text-decoration:none;font-weight:700;padding:14px;border-radius:12px;text-align:center;margin-bottom:10px">🚀 Открыть @Ibaraholka_bot</a>'+
-    '<button id="botCopyBtn" class="btn-cta" style="display:block;width:100%;background:#27272a;color:#fff;border:0;font-weight:600;padding:12px;border-radius:12px;cursor:pointer;font-family:inherit">📋 Скопировать ссылку</button>'+
+    '<button onclick="copyUrlToClip(url)" class="btn-cta" style="display:block;width:100%;background:#27272a;color:#fff;border:0;font-weight:600;padding:12px;border-radius:12px;cursor:pointer;font-family:inherit">📋 Скопировать ссылку</button>'+
     '</div></div>';
   document.body.insertAdjacentHTML('beforeend',html);
-  setTimeout(()=>{
-    const btn=document.getElementById('botCopyBtn');
-    if(btn)btn.onclick=async()=>{
-      try{await navigator.clipboard.writeText(url);toast('✅ Скопировано');}
-      catch(e){toast('Скопируй вручную: '+url);}
-    };
-  },50);
 }
 const _tg=window.Telegram?.WebApp;window.tg=_tg;const auth=()=>{return _tg?.initData?{Authorization:'tma '+_tg.initData}:{};};
 const me=()=>{const tg=window.Telegram?.WebApp;return tg?.initDataUnsafe?.user||null;};
@@ -407,6 +400,8 @@ async function openDetail(id){
       ${!isMine?`<button class="btn-cta" style="width:100%;background:#26262E;color:#fff" onclick="onShare('${id}','${esc(l.title||username)}')">📤 Поделиться</button>`:''}
     </div>
   </div></div>`;
+  document.body.insertAdjacentHTML('beforeend',html);
+}
 
 function openSellForm(showWarning){
   haptic('medium');
@@ -819,6 +814,8 @@ function showCopyHelp(url){
     </div>
     <button class="btn-cta" style="width:100%;background:linear-gradient(135deg,#FFB800,#FF8C00);color:#0B0B0F;font-weight:700" onclick="closeModal()">Понятно</button>
   </div></div>`;
+  document.body.insertAdjacentHTML('beforeend',html);
+}
 
 // === ДЕМО-ГАРАНТ: показывает flow без бэка ===
 let demoStep=0;
@@ -974,7 +971,23 @@ async function openMatch(){
       $('mMsg').textContent='Создаём…';
       try{
         const r=await apiPost('/match/subscribe',{query:q});
-        if(r.ok){$('mMsg').textContent='✅ Подписка создана: '+r.subscription_id;setTimeout(closeModal,1500);load();}
+        if(r.ok){$('mMsg').textContent='✅ Подписка создана: '+r.subscription_id;setTimeout(closeModal,1500);
+window.copyUrlToClip=async(u)=>{try{await navigator.clipboard.writeText(u);toast("Скопировано")}catch(e){toast("Скопируй вручную: "+u)}};
+
+window.openSellForm = openSellForm;
+window.openSell = openSell;
+window.openDetail = openDetail;
+window.payMethod = payMethod;
+window.openGuarant = openGuarant;
+window.openGuarantDemo = openGuarantDemo;
+window.showCopyHelp = showCopyHelp;
+window.showOpenViaBotModal = showOpenViaBotModal;
+window.shareListing = shareListing;
+window.openProfile = openProfile;
+window.openMatch = openMatch;
+window.openRefs = openRefs;
+window.demoRender = demoRender;
+load();}
         else if(r.payment_required){$('mMsg').innerHTML='⚠️ Первая бесплатная уже использована. Стоимость: '+r.need_payment+' монет';}
         else $('mMsg').textContent='❌ '+(r.error||'Ошибка');
       }catch(err){$('mMsg').textContent='❌ '+err.message;}
