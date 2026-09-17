@@ -13,7 +13,7 @@
 // cleared by the URL itself (?v=…), not by saved-version mismatch.
 (function(){
   try{
-    var v='v53';
+    var v='v52.2';
     localStorage.setItem('__ib_version',v);
     var curParams=new URLSearchParams(location.search).get('v');
     if(!curParams||curParams!==v){
@@ -189,7 +189,6 @@ function showOpenViaBotModal(){
 const _tg=window.Telegram?.WebApp;window.tg=_tg;const auth=()=>{return _tg?.initData?{Authorization:'tma '+_tg.initData}:{};};
 const me=()=>{const tg=window.Telegram?.WebApp;return tg?.initDataUnsafe?.user||null;};
 const openLink=(u)=>{const tg=window.Telegram?.WebApp;if(tg?.openLink){tg.openLink(u);}else{window.open(u,'_blank');}};
-window.tgOpenLink=function(u){try{const tg=window.Telegram?.WebApp;if(tg&&tg.openLink){tg.openLink(u);return;}if(tg&&tg.openTelegramLink){tg.openTelegramLink(u);return;}}catch(e){console.error('tgOpenLink fail',e);}window.open(u,'_blank');};
 const closeModal=()=>{document.querySelectorAll('.mbg').forEach(m=>m.remove());};
 
 async function apiGet(p){const r=await fetch(API+p,{cache:'no-store',headers:auth()});if(!r.ok)throw new Error(r.status);return await r.json();}
@@ -527,40 +526,50 @@ function openSellForm(showWarning){
     }
     closeModal();
     await loadListings();
-    // Для платных тарифов — показываем модалку с 3 способами оплаты
+    // Для платных тарифов — показываем модалку с инструкцией (БЕЗ внешних ссылок)
     if(tier!=='free'){
       const tg=window.Telegram?.WebApp;
       const stars=tier==='vip'?150:50;
       const amount=tier==='vip'?750:250;
       const botUrl='https://t.me/Ibaraholka_bot?start='+encodeURIComponent('pay_'+createdId+'_'+tier);
-      // Карта Тинькофф для оплаты тарифа (можно в комментарии указать ID объявления)
-      const card='2200 7007 2222 5678';
-      const tonWallet='UQB...IBARAHOLKA_WALLET';
-      const html=`<div class="mbg" onclick="if(event.target===this)closeModal()"><div class="modal" style="position:relative;text-align:left;max-width:360px">
+      // Реквизиты для оплаты
+      const card='2200 7007 2222 5678';          // Тинькофф
+      const tonWallet='UQCAhDLD17FVwmprVze2V35mICOqjmEpBdJF-cJyCZqfph-3';  // TON
+      const tonAmt=tier==='vip'?'0.75':'0.25';
+      const comment='pay_'+createdId;
+      const html=`<div class="mbg" onclick="if(event.target===this)closeModal()"><div class="modal" style="position:relative;text-align:left;max-width:380px">
         <button class="modal-close" onclick="closeModal()">✕</button>
         <h2 style="font-size:18px;margin:0 0 6px">${tier==='vip'?'👑 VIP — 7 дней в топе':'⭐ TOP — 24 часа в топе'}</h2>
-        <p style="font-size:13px;color:#a1a1aa;margin-bottom:14px">Объявление <b>#${createdId.replace('l_','')}</b> создано. Выбери способ оплаты:</p>
-        <div style="background:#18181b;border:1px solid #27272a;border-radius:12px;padding:12px;margin-bottom:14px;font-size:12px;color:#a1a1aa">
-          <div style="display:flex;justify-content:space-between;padding:4px 0"><span>ID объявления</span><b style="color:#fff">#${createdId.replace('l_','')}</b></div>
+        <p style="font-size:13px;color:#a1a1aa;margin-bottom:14px">Объявление <b>#${createdId.replace('l_','')}</b> создано в режиме «ожидает оплаты». Активируется автоматически после оплаты.</p>
+        <div style="background:#18181b;border:1px solid #27272a;border-radius:12px;padding:12px;margin-bottom:14px;font-size:13px;color:#a1a1aa">
           <div style="display:flex;justify-content:space-between;padding:4px 0"><span>Тариф</span><b style="color:#fff">${tier.toUpperCase()}</b></div>
           <div style="display:flex;justify-content:space-between;padding:4px 0"><span>Стоимость</span><b style="color:#FFB800">${stars} ★ / ${amount} ₽</b></div>
           <div style="display:flex;justify-content:space-between;padding:4px 0"><span>Длительность</span><b style="color:#fff">${tier==='vip'?'7 дней':'24 часа'}</b></div>
         </div>
 
-        <!-- 3 кнопки оплаты -->
-        <a href="https://t.me/Ibaraholka_bot?start=pay_${createdId}_${tier}" onclick="tgOpenLink(this.href);return false" class="btn-cta" style="width:100%;background:linear-gradient(135deg,#FFB800,#FF8C00);color:#0B0B0F;font-weight:700;padding:14px;border-radius:12px;margin-bottom:8px;text-decoration:none;display:flex;align-items:center;justify-content:center;gap:8px;font-size:14px">⭐ Оплатить ${stars} ★ звёздами</a>
-        <a href="https://www.tinkoff.ru/rm/payments/to-card" onclick="tgOpenLink(this.href);return false" class="btn-cta" style="width:100%;background:linear-gradient(135deg,#FFDD2D,#FCD535);color:#0B0B0F;font-weight:700;padding:14px;border-radius:12px;margin-bottom:8px;text-decoration:none;display:flex;align-items:center;justify-content:center;gap:8px;font-size:14px">💳 Открыть Тинькофф</a>
-        <a href="https://app.tonkeeper.com/transfer/UQCAhDLD17FVwmprVze2V35mICOqjmEpBdJF-cJyCZqfph-3?amount=${tier==='vip'?0.75:0.25}&text=pay_${createdId}" onclick="tgOpenLink(this.href);return false" class="btn-cta" style="width:100%;background:linear-gradient(135deg,#0098EA,#007AFF);color:#fff;font-weight:700;padding:14px;border-radius:12px;margin-bottom:14px;text-decoration:none;display:flex;align-items:center;justify-content:center;gap:8px;font-size:14px">💎 Открыть TON</a>
+        <p style="font-size:13px;font-weight:700;margin:0 0 6px">⭐ Способ 1: Telegram Звёзды</p>
+        <p style="font-size:12px;color:#a1a1aa;margin:0 0 8px">Проще всего. Бот пришлёт инвойс в личку — нажми и оплати.</p>
+        <button class="btn-cta" style="width:100%;background:linear-gradient(135deg,#FFB800,#FF8C00);color:#0B0B0F;font-weight:700;padding:14px;border-radius:12px;border:0;font-size:14px;cursor:pointer" onclick="try{const t=window.Telegram?.WebApp;t?.openTelegramLink?t.openTelegramLink('${botUrl}'):t?.openLink('${botUrl}');}catch(e){}closeModal()">⭐ Оплатить ${stars} ★ в боте</button>
 
-        <div style="margin-top:6px;font-size:11px;color:#71717a;text-align:center;line-height:1.4">После оплаты — вернись сюда, тариф активируется автоматически.</div>
-        <button class="btn-cta" style="width:100%;background:transparent;color:#a1a1aa;margin-top:10px" onclick="closeModal()">Оплачу позже</button>
+        <p style="font-size:13px;font-weight:700;margin:14px 0 6px">💳 Способ 2: Тинькофф (перевод на карту)</p>
+        <div style="background:#18181b;border:1px solid #FFDD2D;border-radius:10px;padding:10px;font-family:monospace;font-size:15px;color:#FFDD2D;text-align:center;margin-bottom:6px">${card}</div>
+        <button class="btn-cta" style="width:100%;background:#26262E;color:#FFDD2D;font-weight:600;padding:10px;border-radius:10px;border:1px solid #FFDD2D;font-size:12px;cursor:pointer" onclick="try{navigator.clipboard.writeText('${card}').then(()=>toast('✅ Карта скопирована')).catch(()=>toast('Скопируй вручную: '+'${card}'));}catch(e){}">📋 Скопировать номер карты</button>
+        <p style="font-size:11px;color:#71717a;margin:6px 0 0;line-height:1.4">В комментарии к переводу укажи: <b>${comment}</b><br>Сумма: <b>${amount} ₽</b></p>
+
+        <p style="font-size:13px;font-weight:700;margin:14px 0 6px">💎 Способ 3: TON</p>
+        <div style="background:#18181b;border:1px solid #0098EA;border-radius:10px;padding:10px;font-family:monospace;font-size:11px;color:#0098EA;text-align:center;word-break:break-all;margin-bottom:6px">${tonWallet}</div>
+        <button class="btn-cta" style="width:100%;background:#26262E;color:#0098EA;font-weight:600;padding:10px;border-radius:10px;border:1px solid #0098EA;font-size:12px;cursor:pointer" onclick="try{navigator.clipboard.writeText('${tonWallet}').then(()=>toast('✅ Кошелёк скопирован')).catch(()=>toast('Скопируй вручную'));}catch(e){}">📋 Скопировать кошелёк TON</button>
+        <p style="font-size:11px;color:#71717a;margin:6px 0 0;line-height:1.4">Сумма: <b>${tonAmt} TON</b><br>Комментарий: <b>${comment}</b></p>
+
+        <div style="margin-top:14px;background:rgba(34,197,94,.1);border:1px solid #22C55E;border-radius:10px;padding:10px;font-size:12px;color:#86efac;line-height:1.5;text-align:center">✅ Тариф активируется <b>автоматически</b> после оплаты.<br>Если не активировался за 5 мин — напиши <b>@Ibaraholka_bot</b></div>
+        <button class="btn-cta" style="width:100%;background:transparent;color:#a1a1aa;margin-top:10px;border:0;cursor:pointer;font-size:13px" onclick="closeModal()">Оплачу позже</button>
       </div></div>`;
       document.body.insertAdjacentHTML('beforeend',html);
     }
   };
 }
 
-// 3 способа оплаты: stars / tinkoff / ton
+
 // Замена payMethod() — реальная интеграция с бэкендом:
 // Stars — invoice уже в личке от бота
 // Тинькофф — POST /payments/yukassa/create → получаем tinkoff_url → openLink → "Я оплатил" → POST /payments/tinkoff/notify
