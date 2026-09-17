@@ -6,16 +6,19 @@
 <title>🍎 Безопасная барахолка Apple-техники</title>
 <script>
 // Force-reload to bust Telegram WebView cache.
-// Stores current version in localStorage; if it changes, replace URL with cache-bust query.
+// IMPORTANT: write new version to localStorage BEFORE location.replace,
+// otherwise the next page load reads the old saved value and triggers
+// another replace → infinite reload loop → black screen.
+// Uses sessionStorage as a "have we reloaded this version before" flag,
+// cleared by the URL itself (?v=…), not by saved-version mismatch.
 (function(){
   try{
-    var v='v47';
-    var saved=localStorage.getItem('__ib_version');
-    if(saved && saved!==v){
+    var v='v48';
+    localStorage.setItem('__ib_version',v);
+    var curParams=new URLSearchParams(location.search).get('v');
+    if(!curParams||curParams!==v){
       var u=location.pathname+'?v='+v+'&t='+Date.now();
       location.replace(u);
-    }else{
-      localStorage.setItem('__ib_version',v);
     }
   }catch(e){}
 })();
@@ -107,7 +110,7 @@ a{color:inherit;text-decoration:none}
 </style>
 </head>
 <body>
-<div id="vmark" style="background:linear-gradient(90deg,#22C55E,#16A34A);padding:10px;text-align:center;font-size:13px;font-weight:700;color:#0B0B0F">v47 · 20:36 · ошибки видны прямо в форме, детальные тосты</div>
+<div id="vmark" style="background:linear-gradient(90deg,#22C55E,#16A34A);padding:10px;text-align:center;font-size:13px;font-weight:700;color:#0B0B0F">v48 · 21:20 · 3 способа оплаты: Stars / Тинькофф / TON · ошибки видны прямо в форме, детальные тосты</div>
 <script>
 setTimeout(()=>{const m=document.getElementById('vmark');if(m&&location.search.indexOf('keep')<0)m.style.display='none';},12000);
 </script>
@@ -508,9 +511,9 @@ function openSellForm(){
         </div>
 
         <!-- 3 кнопки оплаты -->
-        <button class="btn-cta" style="width:100%;background:linear-gradient(135deg,#FFB800,#FF8C00);color:#0B0B0F;font-weight:700;padding:14px;border-radius:12px;margin-bottom:8px;border:0;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;gap:8px" onclick="payMethod('stars','${botUrl}')">⭐ Оплатить ${stars} ★ звёздами</button>
-        <button class="btn-cta" style="width:100%;background:linear-gradient(135deg,#FFDD2D,#FCD535);color:#0B0B0F;font-weight:700;padding:14px;border-radius:12px;margin-bottom:8px;border:0;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;gap:8px" onclick="payMethod('tinkoff','${botUrl}','${card}',${amount},'${createdId}')">💳 Открыть Тинькофф</button>
-        <button class="btn-cta" style="width:100%;background:linear-gradient(135deg,#0098EA,#007AFF);color:#fff;font-weight:700;padding:14px;border-radius:12px;margin-bottom:14px;border:0;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;gap:8px" onclick="payMethod('ton','${botUrl}','${tonWallet}',${amount},'${createdId}')">💎 Открыть TON</button>
+        <button class="btn-cta" style="width:100%;background:linear-gradient(135deg,#FFB800,#FF8C00);color:#0B0B0F;font-weight:700;padding:14px;border-radius:12px;margin-bottom:8px;border:0;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;gap:8px" onclick="payMethod('stars','${createdId}','${tier}')">⭐ Оплатить ${stars} ★ звёздами</button>
+        <button class="btn-cta" style="width:100%;background:linear-gradient(135deg,#FFDD2D,#FCD535);color:#0B0B0F;font-weight:700;padding:14px;border-radius:12px;margin-bottom:8px;border:0;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;gap:8px" onclick="payMethod('tinkoff','${createdId}','${tier}')">💳 Открыть Тинькофф</button>
+        <button class="btn-cta" style="width:100%;background:linear-gradient(135deg,#0098EA,#007AFF);color:#fff;font-weight:700;padding:14px;border-radius:12px;margin-bottom:14px;border:0;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;gap:8px" onclick="payMethod('ton','${createdId}','${tier}')">💎 Открыть TON</button>
 
         <div style="margin-top:6px;font-size:11px;color:#71717a;text-align:center;line-height:1.4">После оплаты — вернись сюда, тариф активируется автоматически.</div>
         <button class="btn-cta" style="width:100%;background:transparent;color:#a1a1aa;margin-top:10px" onclick="closeModal()">Оплачу позже</button>
@@ -521,62 +524,135 @@ function openSellForm(){
 }
 
 // 3 способа оплаты: stars / tinkoff / ton
-window.payMethod=function(method, botUrl, card, amount, listingId){
+// Замена payMethod() — реальная интеграция с бэкендом:
+// Stars — invoice уже в личке от бота
+// Тинькофф — POST /payments/yukassa/create → получаем tinkoff_url → openLink → "Я оплатил" → POST /payments/tinkoff/notify
+// TON — POST /payments/ton/create → wallet+amount+comment → tonkeeper://transfer/... → "Проверить" → /payments/ton/verify
+window.payMethod=async function(method, listingId, tier){
   haptic('medium');
+  const tg=window.Telegram?.WebApp;
+  const openLink=(url)=>{try{tg?.openLink?.(url);}catch(e){try{window.open(url,'_blank');}catch(_){}}};
+
   if(method==='stars'){
-    // Stars — invoice уже пришёл в личку бота сразу после создания объявления
-    // Открываем бота (без deep-link, чтобы бот не потерял контекст)
+    // Stars — инвойс уже пришёл в личку (invoice_sent=true после create_listing для premium/vip)
     openLink('https://t.me/Ibaraholka_bot');
-    // Показываем модалку с инструкцией
-    const html='<div class="mbg" onclick="if(event.target===this)closeModal()"><div class="modal" style="position:relative;text-align:left;max-width:340px">'+
+    const html='<div class="mbg" onclick="if(event.target===this)closeModal()"><div class="modal" style="position:relative;text-align:left;max-width:360px">'+
       '<button class="modal-close" onclick="closeModal()">✕</button>'+
-      '<h2 style="font-size:18px;margin:0 0 8px">⭐ Stars-инвойс</h2>'+
-      '<p style="font-size:13px;color:#a1a1aa;margin-bottom:14px;line-height:1.5">Инвойс уже отправлен ботом в личку — обычно приходит за 1–2 секунды.<br><br>Открой <b>@Ibaraholka_bot</b> в Telegram и нажми на кнопку <b>«Оплатить»</b> в сообщении.</p>'+
-      '<a href="https://t.me/Ibaraholka_bot" target="_blank" class="btn-cta" style="display:block;text-align:center;background:linear-gradient(135deg,#FFB800,#FF8C00);color:#0B0B0F;font-weight:700;padding:14px;border-radius:12px;text-decoration:none;margin-bottom:8px">📲 Открыть бота</a>'+
+      '<h2 style="font-size:18px;margin:0 0 8px">⭐ Оплата Stars</h2>'+
+      '<p style="font-size:13px;color:#a1a1aa;margin-bottom:14px;line-height:1.5">Бот уже отправил инвойс в личку в Telegram — обычно приходит за 1–2 секунды.<br><br>Открой <b>@Ibaraholka_bot</b> и нажми <b>«Оплатить ⭐»</b> в сообщении.</p>'+
+      '<div style="background:#18181b;border:1px solid #27272a;border-radius:12px;padding:12px;margin-bottom:14px;font-size:12px;color:#a1a1aa">'+
+        '<div style="display:flex;justify-content:space-between;padding:3px 0"><span>Тариф</span><b style="color:#fff">'+(tier==='vip'?'VIP (7 дней)':'TOP (24ч)')+'</b></div>'+
+        '<div style="display:flex;justify-content:space-between;padding:3px 0"><span>Стоимость</span><b style="color:#FFB800">'+(tier==='vip'?'150 ★':'50 ★')+'</b></div>'+
+        '<div style="display:flex;justify-content:space-between;padding:3px 0"><span>ID объявления</span><b style="color:#fff;font-family:monospace">#'+(listingId||'').replace('l_','')+'</b></div>'+
+      '</div>'+
+      '<a href="https://t.me/Ibaraholka_bot" target="_blank" rel="noopener" class="btn-cta" style="display:block;text-align:center;background:linear-gradient(135deg,#FFB800,#FF8C00);color:#0B0B0F;font-weight:700;padding:14px;border-radius:12px;text-decoration:none;margin-bottom:8px">📲 Открыть бота</a>'+
       '<button class="btn-cta" style="width:100%;background:transparent;color:#a1a1aa" onclick="closeModal()">Закрыть</button>'+
       '</div></div>';
     document.body.insertAdjacentHTML('beforeend',html);
     haptic('success');
     return;
   }
-  if(method==='tinkoff'){
-    // Тинькофф — открываем приложение банка (если установлено) или показываем реквизиты
-    const tg=window.Telegram?.WebApp;
-    const payUrl='https://www.tinkoff.ru/rm/payments/to-card/'+card+'/?amount='+(amount||250);
-    openLink(payUrl);
-    // Дополнительно показываем реквизиты и кнопку «Скопировать»
-    showPayDetails('tinkoff', card, amount, listingId);
-    return;
-  }
-  if(method==='ton'){
-    // TON — открываем кошелёк
-    const tg=window.Telegram?.WebApp;
-    const tonUrl='https://app.tonkeeper.com/transfer/'+(window.TON_WALLET||'UQB...IBARAHOLKA')+'?amount='+(amount||250)+'&text='+encodeURIComponent(listingId||'listing');
-    openLink(tonUrl);
-    showPayDetails('ton', window.TON_WALLET||'UQB...IBARAHOLKA', amount, listingId);
-    return;
-  }
-};
 
-window.showPayDetails=function(method, target, amount, listingId){
-  const isCard = method==='tinkoff';
-  const label = isCard ? 'Карта Тинькофф' : 'TON-кошелёк';
-  const memo = `ID: ${listingId||''}`;
-  const html=`<div class="mbg" onclick="if(event.target===this)closeModal()"><div class="modal" style="position:relative;text-align:left;max-width:360px">
-    <button class="modal-close" onclick="closeModal()">✕</button>
-    <h2 style="font-size:17px;margin:0 0 10px">${isCard?'💳 Оплата Тинькофф':'💎 Оплата TON'}</h2>
-    <p style="font-size:13px;color:#a1a1aa;margin-bottom:14px">После перевода вернись в Mini App — тариф активируется автоматически.</p>
-    <div style="background:#18181b;border:1px solid #27272a;border-radius:12px;padding:14px;margin-bottom:14px">
-      <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #27272a"><span style="color:#a1a1aa;font-size:12px">${label}</span><b id="payTarget" style="color:#fff;font-family:monospace;font-size:13px;word-break:break-all;text-align:right;max-width:60%">${target||''}</b></div>
-      <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #27272a"><span style="color:#a1a1aa;font-size:12px">Сумма</span><b style="color:#FFB800;font-size:14px">${amount||250} ₽</b></div>
-      <div style="display:flex;justify-content:space-between;padding:6px 0"><span style="color:#a1a1aa;font-size:12px">Комментарий</span><b id="payMemo" style="color:#FFB800;font-family:monospace;font-size:13px">${memo}</b></div>
-    </div>
-    <button class="btn-cta" style="width:100%;background:linear-gradient(135deg,#FFB800,#FF8C00);color:#0B0B0F;font-weight:700;padding:14px;border-radius:12px;margin-bottom:8px;border:0;cursor:pointer;font-size:14px" onclick="navigator.clipboard.writeText('${target||''}').then(()=>toast('✅ ${label} скопирован')).catch(()=>toast('❌ Не удалось скопировать'))">📋 Скопировать ${isCard?'карту':'кошелёк'}</button>
-    <button class="btn-cta" style="width:100%;background:#26262E;color:#fff;margin-bottom:6px" onclick="navigator.clipboard.writeText('${amount||250}').then(()=>toast('✅ Сумма скопирована'))">📋 Скопировать сумму</button>
-    <button class="btn-cta" style="width:100%;background:#26262E;color:#fff" onclick="navigator.clipboard.writeText('${memo}').then(()=>toast('✅ Комментарий скопирован'))">📋 Скопировать комментарий</button>
-    <button class="btn-cta" style="width:100%;background:transparent;color:#a1a1aa;margin-top:10px" onclick="closeModal()">Готово</button>
-  </div></div>`;
-  document.body.insertAdjacentHTML('beforeend',html);
+  if(method==='tinkoff'){
+    // Получаем tinkoff_url из бэка (mode='tinkoff' когда нет yoowallet)
+    showFormStatus(document.body,'⏳ Открываю Тинькофф…');
+    try{
+      const r=await apiPost('/payments/yukassa/create',{listing_id:listingId,tier,user_id:window.tg?.initDataUnsafe?.user?.id||0});
+      if(!r.ok)throw new Error(r.error||'payment_create_failed');
+      const url=r.tinkoff_url||r.confirmation_url;
+      if(!url)throw new Error('no_pay_url');
+      openLink(url);
+      // Модалка "Я оплатил"
+      const html='<div class="mbg" onclick="if(event.target===this)closeModal()"><div class="modal" style="position:relative;text-align:left;max-width:360px">'+
+        '<button class="modal-close" onclick="closeModal()">✕</button>'+
+        '<h2 style="font-size:18px;margin:0 0 8px">💳 Оплата Тинькофф</h2>'+
+        '<p style="font-size:13px;color:#a1a1aa;margin-bottom:14px">После оплаты в приложении банка — вернись сюда и нажми кнопку ниже.<br><br>Бэк активирует объявление автоматически.</p>'+
+        '<div style="background:#18181b;border:1px solid #27272a;border-radius:12px;padding:12px;margin-bottom:14px;font-size:12px;color:#a1a1aa">'+
+          '<div style="display:flex;justify-content:space-between;padding:3px 0"><span>Сумма</span><b style="color:#FFB800">'+r.amount_rub+' ₽</b></div>'+
+          '<div style="display:flex;justify-content:space-between;padding:3px 0"><span>Способ</span><b style="color:#fff">через Тинькофф Банк</b></div>'+
+          '<div style="display:flex;justify-content:space-between;padding:3px 0"><span>ID</span><b style="color:#fff;font-family:monospace">#'+listingId.replace('l_','')+'</b></div>'+
+        '</div>'+
+        '<button class="btn-cta" id="tinkoffPaid" style="width:100%;background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;font-weight:700;padding:14px;border-radius:12px;margin-bottom:8px;border:0;cursor:pointer;font-size:14px">✅ Я оплатил — Активировать</button>'+
+        '<button class="btn-cta" style="width:100%;background:#FFDD2D;color:#0B0B0F;margin-bottom:8px" onclick="try{navigator.clipboard.writeText(\''+url+'\');toast(\'✅ Ссылка скопирована\');}catch(e){toast(\'❌ Не скопировалось\')}">📋 Скопировать ссылку оплаты</button>'+
+        '<button class="btn-cta" style="width:100%;background:transparent;color:#a1a1aa" onclick="window.open(\''+url+'\',\'_blank\')">🔗 Открыть снова</button>'+
+        '</div></div>';
+      document.body.insertAdjacentHTML('beforeend',html);
+      // hook the "I paid" button
+      const btn=document.getElementById('tinkoffPaid');
+      btn.onclick=async()=>{
+        btn.disabled=true;btn.textContent='⏳ Проверяю…';
+        try{
+          await apiPost('/payments/tinkoff/notify',{listing_id:listingId,user_id:window.tg?.initDataUnsafe?.user?.id||0,tier});
+          await apiPost('/payments/activate',{listing_id:listingId,user_id:window.tg?.initDataUnsafe?.user?.id||0});
+          btn.textContent='✅ Готово!';
+          btn.style.background='linear-gradient(135deg,#22c55e,#16a34a)';
+          toast('🎉 Объявление активировано — теперь оно в топе');
+          haptic('success');
+          setTimeout(()=>{closeModal();loadListings();},1200);
+        }catch(e){
+          btn.disabled=false;btn.textContent='✅ Я оплатил — Активировать';
+          toast('❌ '+(e.message||'ошибка'));
+          haptic('error');
+        }
+      };
+    }catch(e){
+      toast('❌ Не удалось открыть Тинькофф: '+(e.message||e));
+      haptic('error');
+    }
+    return;
+  }
+
+  if(method==='ton'){
+    showFormStatus(document.body,'⏳ Создаю TON-платёж…');
+    try{
+      const r=await apiPost('/payments/ton/create',{listing_id:listingId,tier});
+      if(!r.ok)throw new Error(r.error||'ton_create_failed');
+      const tonUrl='https://app.tonkeeper.com/transfer/'+r.wallet+'?amount='+r.amount_ton+'&text='+encodeURIComponent(r.comment);
+      openLink(tonUrl);
+      const html='<div class="mbg" onclick="if(event.target===this)closeModal()"><div class="modal" style="position:relative;text-align:left;max-width:360px">'+
+        '<button class="modal-close" onclick="closeModal()">✕</button>'+
+        '<h2 style="font-size:18px;margin:0 0 8px">💎 Оплата TON</h2>'+
+        '<p style="font-size:13px;color:#a1a1aa;margin-bottom:14px">Переведи <b>'+r.amount_ton+' TON</b> на кошелёк ниже. В комментарии (memo) обязательно укажи <b>'+r.comment+'</b>.<br><br>После перевода нажми «Проверить оплату» — активируем автоматически.</p>'+
+        '<div style="background:#18181b;border:1px solid #27272a;border-radius:12px;padding:14px;margin-bottom:14px">'+
+          '<div style="margin-bottom:10px"><div style="color:#a1a1aa;font-size:11px;margin-bottom:4px">КОШЕЛЁК</div><b id="tonWallet" style="color:#0098EA;font-family:monospace;font-size:13px;word-break:break-all">'+r.wallet+'</b>'+
+            '<button onclick="try{navigator.clipboard.writeText(\''+r.wallet+'\');toast(\'✅ Кошелёк скопирован\');}catch(e){toast(\'❌\');}" style="background:#27272a;color:#a1a1aa;border:0;border-radius:6px;padding:3px 8px;font-size:10px;margin-top:4px">📋 Копировать</button></div>'+
+          '<div style="margin-bottom:10px"><div style="color:#a1a1aa;font-size:11px;margin-bottom:4px">СУММА</div><b style="color:#fff;font-size:15px">'+r.amount_ton+' TON</b>'+
+            '<button onclick="try{navigator.clipboard.writeText(\''+r.amount_ton+'\');toast(\'✅ Сумма скопирована\');}catch(e){toast(\'❌\');}" style="background:#27272a;color:#a1a1aa;border:0;border-radius:6px;padding:3px 8px;font-size:10px;margin-top:4px">📋 Копировать</button></div>'+
+          '<div><div style="color:#a1a1aa;font-size:11px;margin-bottom:4px">КОММЕНТАРИЙ (ОБЯЗАТЕЛЬНО)</div><b id="tonComment" style="color:#FFB800;font-family:monospace;font-size:13px;word-break:break-all">'+r.comment+'</b>'+
+            '<button onclick="try{navigator.clipboard.writeText(\''+r.comment+'\');toast(\'✅ Комментарий скопирован\');}catch(e){toast(\'❌\');}" style="background:#27272a;color:#a1a1aa;border:0;border-radius:6px;padding:3px 8px;font-size:10px;margin-top:4px">📋 Копировать</button></div>'+
+        '</div>'+
+        '<button class="btn-cta" id="tonVerify" style="width:100%;background:linear-gradient(135deg,#0098EA,#007AFF);color:#fff;font-weight:700;padding:14px;border-radius:12px;margin-bottom:8px;border:0;cursor:pointer;font-size:14px">🔄 Проверить оплату</button>'+
+        '<button class="btn-cta" style="width:100%;background:transparent;color:#a1a1aa" onclick="window.open(\''+tonUrl+'\',\'_blank\')">🔗 Открыть Tonkeeper снова</button>'+
+        '</div></div>';
+      document.body.insertAdjacentHTML('beforeend',html);
+      const verify=document.getElementById('tonVerify');
+      verify.onclick=async()=>{
+        verify.disabled=true;verify.textContent='⏳ Проверяю блокчейн…';
+        try{
+          const r2=await apiPost('/payments/ton/verify',{listing_id:listingId,comment:r.comment,user_id:window.tg?.initDataUnsafe?.user?.id||0});
+          if(r2.ok){
+            await apiPost('/payments/activate',{listing_id:listingId,user_id:window.tg?.initDataUnsafe?.user?.id||0});
+            verify.textContent='✅ Готово!';
+            toast('🎉 Объявление активировано');
+            haptic('success');
+            setTimeout(()=>{closeModal();loadListings();},1200);
+          }else{
+            verify.disabled=false;verify.textContent='🔄 Проверить оплату';
+            toast('⏳ '+(r2.error||'перевод ещё не виден — подожди 30 сек'));
+            haptic('error');
+          }
+        }catch(e){
+          verify.disabled=false;verify.textContent='🔄 Проверить оплату';
+          toast('❌ '+(e.message||'ошибка'));
+          haptic('error');
+        }
+      };
+    }catch(e){
+      toast('❌ TON-платёж: '+(e.message||e));
+      haptic('error');
+    }
+    return;
+  }
 };
 
 function openSell(){
