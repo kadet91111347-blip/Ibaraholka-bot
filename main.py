@@ -1599,6 +1599,34 @@ app.add_middleware(
 app.add_middleware(GZipMiddleware, minimum_size=500)
 
 
+# === Mini App static serving (v24.html + картинки) ===
+# Раздаёт Mini App с того же домена что и API — нет CORS, нет watermark "Made with Spru"
+import pathlib
+MINIAPP_DIR = pathlib.Path(__file__).parent / "miniapp"
+
+@app.get("/mini", response_class=HTMLResponse)
+@app.get("/mini/", response_class=HTMLResponse)
+async def mini_app():
+    """Отдаёт index.html Mini App"""
+    p = MINIAPP_DIR / "index.html"
+    if not p.exists():
+        return HTMLResponse(content="<h1>Mini App not deployed</h1>", status_code=404)
+    return HTMLResponse(content=p.read_text(encoding="utf-8"), headers={
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    })
+
+@app.get("/mini/{filename}")
+async def mini_static(filename: str):
+    """Отдаёт статику Mini App (картинки и т.д.)"""
+    from fastapi.responses import HTMLResponse, FileResponse
+    p = MINIAPP_DIR / filename
+    if not p.exists() or not p.is_file():
+        raise HTTPException(404, "not found")
+    return FileResponse(p, headers={"Cache-Control": "public, max-age=86400"})
+
+
 @app.get("/")
 def root():
     return {"app": "АйБарахолка API", "version": "1.0.0", "status": "ok"}
