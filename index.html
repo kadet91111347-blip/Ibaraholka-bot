@@ -13,7 +13,7 @@
 // cleared by the URL itself (?v=…), not by saved-version mismatch.
 (function(){
   try{
-    var v='v48';
+    var v='v49';
     localStorage.setItem('__ib_version',v);
     var curParams=new URLSearchParams(location.search).get('v');
     if(!curParams||curParams!==v){
@@ -110,7 +110,7 @@ a{color:inherit;text-decoration:none}
 </style>
 </head>
 <body>
-<div id="vmark" style="background:linear-gradient(90deg,#22C55E,#16A34A);padding:10px;text-align:center;font-size:13px;font-weight:700;color:#0B0B0F">v48 · 21:20 · 3 способа оплаты: Stars / Тинькофф / TON · ошибки видны прямо в форме, детальные тосты</div>
+<div id="vmark" style="background:linear-gradient(90deg,#22C55E,#16A34A);padding:10px;text-align:center;font-size:13px;font-weight:700;color:#0B0B0F">v49 · 21:45 · полные логи + резервные кнопки-копии на случай зависания · ошибки видны прямо в форме, детальные тосты</div>
 <script>
 setTimeout(()=>{const m=document.getElementById('vmark');if(m&&location.search.indexOf('keep')<0)m.style.display='none';},12000);
 </script>
@@ -531,7 +531,15 @@ function openSellForm(){
 window.payMethod=async function(method, listingId, tier){
   haptic('medium');
   const tg=window.Telegram?.WebApp;
-  const openLink=(url)=>{try{tg?.openLink?.(url);}catch(e){try{window.open(url,'_blank');}catch(_){}}};
+  const openLink=(url)=>{
+        try{
+          if(tg?.openLink){tg.openLink(url);console.log('[pay] openLink via TG:',url);}
+          else{window.open(url,'_blank');console.log('[pay] window.open:',url);}
+        }catch(e){
+          console.error('[pay] openLink failed:',e,url);
+          try{window.open(url,'_blank');}catch(_){toast('❌ Не удалось открыть ссылку. Скопируй её вручную.');}
+        }
+      };
 
   if(method==='stars'){
     // Stars — инвойс уже пришёл в личку (invoice_sent=true после create_listing для premium/vip)
@@ -546,6 +554,7 @@ window.payMethod=async function(method, listingId, tier){
         '<div style="display:flex;justify-content:space-between;padding:3px 0"><span>ID объявления</span><b style="color:#fff;font-family:monospace">#'+(listingId||'').replace('l_','')+'</b></div>'+
       '</div>'+
       '<a href="https://t.me/Ibaraholka_bot" target="_blank" rel="noopener" class="btn-cta" style="display:block;text-align:center;background:linear-gradient(135deg,#FFB800,#FF8C00);color:#0B0B0F;font-weight:700;padding:14px;border-radius:12px;text-decoration:none;margin-bottom:8px">📲 Открыть бота</a>'+
+      '<button class="btn-cta" style="width:100%;background:#27272a;color:#a1a1aa" onclick="try{navigator.clipboard.writeText(\'https://t.me/Ibaraholka_bot\');toast(\'✅ Ссылка скопирована\');}catch(e){toast(\'❌\');}">📋 Скопировать ссылку</button>'+
       '<button class="btn-cta" style="width:100%;background:transparent;color:#a1a1aa" onclick="closeModal()">Закрыть</button>'+
       '</div></div>';
     document.body.insertAdjacentHTML('beforeend',html);
@@ -561,7 +570,8 @@ window.payMethod=async function(method, listingId, tier){
       if(!r.ok)throw new Error(r.error||'payment_create_failed');
       const url=r.tinkoff_url||r.confirmation_url;
       if(!url)throw new Error('no_pay_url');
-      openLink(url);
+      console.log('[pay] tinkoff_url:',url);
+      console.log('[pay] tinkoff_url:',url); openLink(url);
       // Модалка "Я оплатил"
       const html='<div class="mbg" onclick="if(event.target===this)closeModal()"><div class="modal" style="position:relative;text-align:left;max-width:360px">'+
         '<button class="modal-close" onclick="closeModal()">✕</button>'+
@@ -608,6 +618,8 @@ window.payMethod=async function(method, listingId, tier){
       const r=await apiPost('/payments/ton/create',{listing_id:listingId,tier});
       if(!r.ok)throw new Error(r.error||'ton_create_failed');
       const tonUrl='https://app.tonkeeper.com/transfer/'+r.wallet+'?amount='+r.amount_ton+'&text='+encodeURIComponent(r.comment);
+      console.log('[pay] ton_url:',tonUrl,'wallet:',r.wallet,'amount:',r.amount_ton,'comment:',r.comment);
+      console.log('[pay] ton_url:',tonUrl,'wallet:',r.wallet,'amount:',r.amount_ton,'comment:',r.comment);
       openLink(tonUrl);
       const html='<div class="mbg" onclick="if(event.target===this)closeModal()"><div class="modal" style="position:relative;text-align:left;max-width:360px">'+
         '<button class="modal-close" onclick="closeModal()">✕</button>'+
