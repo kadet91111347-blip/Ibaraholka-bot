@@ -587,6 +587,42 @@ class ListingIn(BaseModel):
 # ============================================================
 # Bot handlers
 # ============================================================
+async def send_invoice_for_listing(message: types.Message, listing_id: str, tier: str):
+    """Re-send Stars invoice for given listing (used by /start=pay_<id>_<tier> deep-link)."""
+    user = {"id": message.from_user.id, "username": message.from_user.username or "", "first_name": message.from_user.first_name or ""}
+    with db_cursor() as conn:
+        row = conn.execute("SELECT title, price, city FROM listings WHERE id=? AND user_id=?", (listing_id, user["id"])).fetchone()
+    if not row:
+        await message.answer("❌ Объявление не найдено. Открой Mini App заново.")
+        return
+    title, price, city = row
+    amount = TIER_PRICES.get(tier)
+    if not amount:
+        await message.answer(f"❌ Неизвестный тариф: {tier}")
+        return
+    tier_name = "TOP 24 часа" if tier == "premium" else "VIP 7 дней"
+    try:
+        invoice_payload = {
+            "chat_id": str(user["id"]),
+            "title": f"{tier_name} · {title[:40]}",
+            "description": f"📱 <b>{title}</b>\n\n💰 {price:,} ₽ · 📍 {city}\n\n<b>{tier_name}</b>".replace(",", " "),
+            "payload": json.dumps({"listing_id": listing_id, "tier": tier}),
+            "provider_token": "",
+            "currency": "XTR",
+            "prices": json.dumps([{"label": tier_name, "amount": amount}]),
+        }
+        import urllib.request, urllib.parse as _up
+        data = _up.urlencode(invoice_payload).encode()
+        req = urllib.request.Request(f"https://api.telegram.org/bot{BOT_TOKEN}/sendInvoice", data=data)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = json.loads(resp.read().decode())
+        if result.get("ok"):
+            await message.answer(f"✅ Инвойс на оплату <b>{tier_name}</b> отправлен выше — нажми <b>«Оплатить ⭐»</b>.")
+        else:
+            await message.answer(f"❌ Ошибка отправки инвойса: {result}")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
+
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
     args = message.text.split(maxsplit=1)
@@ -604,6 +640,19 @@ async def cmd_start(message: types.Message):
     if payload.startswith("listing_"):
         # Deep link to specific listing
         text += "\n\n<i>Открываю объявление...</i>"
+
+    # Pay deep-link: pay_<listing_id>_<tier> → re-send invoice
+    if payload.startswith("pay_"):
+        try:
+            parts = payload.split("_", 2)  # ["pay", "<id>", "<tier>"]
+            if len(parts) == 3:
+                listing_id = parts[1]
+                tier = parts[2]
+                # Re-send invoice via TIER_PRICES path
+                await send_invoice_for_listing(message, listing_id, tier)
+                return
+        except Exception as e:
+            logger.error(f"pay_ handler failed: {e}")
 
     # Referral landing — payload like 'ref_12345' or 'ref_748834052'
     if payload.startswith("ref_"):
