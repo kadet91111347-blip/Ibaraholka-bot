@@ -13,7 +13,7 @@
 // cleared by the URL itself (?v=…), not by saved-version mismatch.
 (function(){
   try{
-    var v='v52.2';
+    var v='v53';
     localStorage.setItem('__ib_version',v);
     var curParams=new URLSearchParams(location.search).get('v');
     if(!curParams||curParams!==v){
@@ -189,6 +189,7 @@ function showOpenViaBotModal(){
 const _tg=window.Telegram?.WebApp;window.tg=_tg;const auth=()=>{return _tg?.initData?{Authorization:'tma '+_tg.initData}:{};};
 const me=()=>{const tg=window.Telegram?.WebApp;return tg?.initDataUnsafe?.user||null;};
 const openLink=(u)=>{const tg=window.Telegram?.WebApp;if(tg?.openLink){tg.openLink(u);}else{window.open(u,'_blank');}};
+window.tgOpenLink=function(u){try{const tg=window.Telegram?.WebApp;if(tg&&tg.openLink){tg.openLink(u);return;}if(tg&&tg.openTelegramLink){tg.openTelegramLink(u);return;}}catch(e){console.error('tgOpenLink fail',e);}window.open(u,'_blank');};
 const closeModal=()=>{document.querySelectorAll('.mbg').forEach(m=>m.remove());};
 
 async function apiGet(p){const r=await fetch(API+p,{cache:'no-store',headers:auth()});if(!r.ok)throw new Error(r.status);return await r.json();}
@@ -547,9 +548,9 @@ function openSellForm(showWarning){
         </div>
 
         <!-- 3 кнопки оплаты -->
-        <a href="https://t.me/Ibaraholka_bot?start=pay_${createdId}_${tier}" target="_blank" rel="noopener" class="btn-cta" style="width:100%;background:linear-gradient(135deg,#FFB800,#FF8C00);color:#0B0B0F;font-weight:700;padding:14px;border-radius:12px;margin-bottom:8px;text-decoration:none;display:flex;align-items:center;justify-content:center;gap:8px;font-size:14px">⭐ Оплатить ${stars} ★ звёздами</a>
-        <a href="https://www.tinkoff.ru/rm/payments/to-card" target="_blank" rel="noopener" class="btn-cta" style="width:100%;background:linear-gradient(135deg,#FFDD2D,#FCD535);color:#0B0B0F;font-weight:700;padding:14px;border-radius:12px;margin-bottom:8px;text-decoration:none;display:flex;align-items:center;justify-content:center;gap:8px;font-size:14px">💳 Открыть Тинькофф</a>
-        <a href="https://app.tonkeeper.com/transfer/UQCAhDLD17FVwmprVze2V35mICOqjmEpBdJF-cJyCZqfph-3?amount=${tier==='vip'?0.75:0.25}&text=pay_${createdId}" target="_blank" rel="noopener" class="btn-cta" style="width:100%;background:linear-gradient(135deg,#0098EA,#007AFF);color:#fff;font-weight:700;padding:14px;border-radius:12px;margin-bottom:14px;text-decoration:none;display:flex;align-items:center;justify-content:center;gap:8px;font-size:14px">💎 Открыть TON</a>
+        <a href="https://t.me/Ibaraholka_bot?start=pay_${createdId}_${tier}" onclick="tgOpenLink(this.href);return false" class="btn-cta" style="width:100%;background:linear-gradient(135deg,#FFB800,#FF8C00);color:#0B0B0F;font-weight:700;padding:14px;border-radius:12px;margin-bottom:8px;text-decoration:none;display:flex;align-items:center;justify-content:center;gap:8px;font-size:14px">⭐ Оплатить ${stars} ★ звёздами</a>
+        <a href="https://www.tinkoff.ru/rm/payments/to-card" onclick="tgOpenLink(this.href);return false" class="btn-cta" style="width:100%;background:linear-gradient(135deg,#FFDD2D,#FCD535);color:#0B0B0F;font-weight:700;padding:14px;border-radius:12px;margin-bottom:8px;text-decoration:none;display:flex;align-items:center;justify-content:center;gap:8px;font-size:14px">💳 Открыть Тинькофф</a>
+        <a href="https://app.tonkeeper.com/transfer/UQCAhDLD17FVwmprVze2V35mICOqjmEpBdJF-cJyCZqfph-3?amount=${tier==='vip'?0.75:0.25}&text=pay_${createdId}" onclick="tgOpenLink(this.href);return false" class="btn-cta" style="width:100%;background:linear-gradient(135deg,#0098EA,#007AFF);color:#fff;font-weight:700;padding:14px;border-radius:12px;margin-bottom:14px;text-decoration:none;display:flex;align-items:center;justify-content:center;gap:8px;font-size:14px">💎 Открыть TON</a>
 
         <div style="margin-top:6px;font-size:11px;color:#71717a;text-align:center;line-height:1.4">После оплаты — вернись сюда, тариф активируется автоматически.</div>
         <button class="btn-cta" style="width:100%;background:transparent;color:#a1a1aa;margin-top:10px" onclick="closeModal()">Оплачу позже</button>
