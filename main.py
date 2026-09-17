@@ -1982,64 +1982,10 @@ async def create_listing(item: ListingIn, request: Request):
     invoice_error = None
     skip_invoice_reason = None
 
-    if item.tier in ("premium", "vip"):
-        if is_demo_user:
-            skip_invoice_reason = "demo user (DEMO_MODE=1) — no payment required"
-        elif not BOT_TOKEN:
-            invoice_error = "BOT_TOKEN not set"
-        else:
-            try:
-                amount = TIER_PRICES[item.tier]
-                tier_name = "TOP 24 часа" if item.tier == "premium" else "VIP 7 дней"
-                import urllib.request
-                import urllib.parse
-                invoice_payload = {
-                    "chat_id": str(user["id"]),
-                    "title": f"{tier_name} · {item.title[:40]}",
-                    "description": (
-                        f"📱 <b>{item.title}</b>\n\n"
-                        f"💰 Цена: {item.price:,} ₽\n"
-                        f"📍 {item.city}\n\n"
-                        f"<b>Что даёт {tier_name}:</b>\n"
-                        f"{('• Размещение в топе ленты 24 часа\n• Выделение золотом' if item.tier == 'premium' else '• Размещение в VIP-зоне 7 дней\n• Приоритет в поиске\n• Бейдж VIP')}".
-                        rstrip()
-                    ),
-                    "payload": json.dumps({"listing_id": listing_id, "tier": item.tier}),
-                    "provider_token": "",
-                    "currency": "XTR",
-                    "prices": json.dumps([{"label": tier_name, "amount": amount}]),
-                }
-                # Add photo if item has one (not base64 — Telegram needs URL or file_id)
-                # For now, skip photo in invoice (can be added later with photo upload)
-                data = urllib.parse.urlencode(invoice_payload).encode()
-                req = urllib.request.Request(
-                    f"https://api.telegram.org/bot{BOT_TOKEN}/sendInvoice",
-                    data=data,
-                )
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    result = json.loads(resp.read().decode())
-                if result.get("ok"):
-                    invoice_msg_id = result["result"]["message_id"]
-                    log_msg = f"[INVOICE] {listing_id}: sent msg_id={invoice_msg_id}"
-                    print(log_msg, flush=True)
-                else:
-                    invoice_error = str(result)
-                    log_msg = f"[INVOICE] {listing_id}: TG error: {result}"
-                    print(log_msg, flush=True)
-                try:
-                    with open("/data/last_post.log", "a") as f:
-                        f.write(log_msg + "\n")
-                except Exception:
-                    pass
-            except Exception as e:
-                invoice_error = str(e)
-                log_msg = f"[INVOICE] {listing_id}: EXCEPTION {type(e).__name__}: {e}"
-                print(log_msg, flush=True)
-                try:
-                    with open("/data/last_post.log", "a") as f:
-                        f.write(log_msg + "\n")
-                except Exception:
-                    pass
+    # v57: НЕ шлём Stars-инвойс автоматически из листинга — Mini App сам откроет Т-Банк
+    # Если нужен Stars — пользователь может перейти по /start=pay_<listing>_<tier>
+    skip_invoice_reason = "v57: Stars invoice is not sent automatically from /listings endpoint. Mini App opens Tinkoff directly."
+    print(f"[INVOICE] {listing_id}: skipped (v57: use pay_ deep-link or Tinkoff)", flush=True)
 
     # Post to channel ONLY if listing status is already 'active'.
     # - Free / demo / admin → status set to 'active' on creation → post immediately
@@ -6108,4 +6054,3 @@ async def setup_webhook(request: Request):
             "max_connections": info.max_connections,
         }
     }
-// Force rebuild at 1789630007
