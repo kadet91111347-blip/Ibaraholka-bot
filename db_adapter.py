@@ -1,235 +1,46 @@
-"""
-DB adapter: provides sqlite3-like API on top of psycopg2 OR pg8000 (PostgreSQL).
-All existing main.py code keeps using get_db() / conn.execute / conn.row_factory.
-"""
+"""Database adapter — psycopg2 (Postgres) with sqlite3 fallback (local dev).
 
+db_cursor() yields a unified cursor-like object that supports:
+  .execute(sql, params) — returns self
+  .executemany(sql, seq) — returns self
+  .executescript(sql) — multi-statement (used in init_db)
+  .fetchone() / .fetchall() — get rows
+  .rowcount / .description — introspection
+  .commit() / .rollback() — explicit commit
+"""
 import os
 import threading
 from contextlib import contextmanager
 
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
-USE_POSTGRES = bool(DATABASE_URL)
-
-# === Backend selection ===
-try:
-    import psycopg2
-    from psycopg2.extras import RealDictCursor
-    from psycopg2.pool import ThreadedConnectionPool
-    _BACKEND = "psycopg2"
-except ImportError:
-    try:
-        import pg8000
-        from pg8000 import Connection
-        _BACKEND = "pg8000"
-    except ImportError:
-        _BACKEND = None
+USE_POSTGRES = bool(DATABASE_URL) and os.getenv("DEMO_MODE", "0").strip() != "1"
 
 
-_PG_POOL = None
-_PG_POOL_LOCK = threading.Lock()
+# ---------- Unified cursor wrapper ----------
+class _CursorAdapter:
+    """Wraps a native cursor (psycopg2 or sqlite3) with uniform dict-like rows
+    on Postgres and executescript support on both."""
 
-
-class _PostgresUnavailable(Exception):
-    """Raised when Postgres is configured but unreachable; triggers sqlite fallback."""
-    pass
-
-
-def _dict_row_factory(cursor):
-    """Returns dict-like rows for both psycopg2 (extras) and pg8000."""
-    if _BACKEND == "psycopg2":
-        return cursor
-    # pg8000: build dict from description + fetched rows
-    desc = [d[0] for d in cursor.description]
-    rows = cursor.fetchall()
-    return [dict(zip(desc, row)) for row in rows]
-
-
-def _init_pool(minconn=1, maxconn=10):
-    """Create pool once. Returns existing pool if already initialized."""
-    global _PG_POOL
-    if _PG_POOL is not None:
-        return _PG_POOL
-    with _PG_POOL_LOCK:
-        if _PG_POOL is not None:
-            return _PG_POOL
-        try:
-            if _BACKEND == "psycopg2":
-                _PG_POOL = ThreadedConnectionPool(
-                    minconn=minconn,
-                    maxconn=maxconn,
-                    dsn=DATABASE_URL,
-                    connect_timeout=10,
-                )
-            elif _BACKEND == "pg8000":
-                # Simple manual pool for pg8000
-                _PG_POOL = {"min": minconn, "max": maxconn, "free": [], "used": set(), "lock": threading.Lock()}
-            else:
-                raise _PostgresUnavailable("No PostgreSQL driver installed (need psycopg2-binary or pg8000)")
-            print(f"[db_adapter] PG pool initialized (backend={_BACKEND}, min={minconn}, max={maxconn})", flush=True)
-            return _PG_POOL
-        except Exception as e:
-            print(f"[db_adapter] PG pool init failed: {e}", flush=True)
-            raise _PostgresUnavailable(str(e))
-
-
-def _pg8000_connect():
-    """Open a new pg8000 connection from DATABASE_URL."""
-    import pg8000
-    # DATABASE_URL format: postgresql://user:pass@host:port/dbname?sslmode=require
-    from urllib.parse import urlparse
-    p = urlparse(DATABASE_URL)
-    ssl_context = None
-    if 'sslmode=require' in DATABASE_URL or p.scheme == 'postgres':
-        import ssl
-        ssl_context = ssl.create_default_context()
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE
-    return pg8000.connect(
-        host=p.hostname,
-        port=p.port or 5432,
-        user=p.username,
-        password=p.password,
-        database=p.path.lstrip('/'),
-        ssl_context=ssl_context,
-    )
-
-
-@contextmanager
-def get_db_connection():
-    """Context manager that yields a connection with row_factory=RealDictCursor-like."""
-    if not USE_POSTGRES:
-        import sqlite3
-        conn = sqlite3.connect(os.getenv("DB_PATH", "ibaraholka.db"))
-        conn.row_factory = sqlite3.Row
-        try:
-            yield conn
-        finally:
-            conn.close()
-        return
-
-    if _PG_POOL is None:
-        _init_pool()
-
-    if _BACKEND == "psycopg2":
-        from psycopg2.extras import RealDictCursor
-        raw = _PG_POOL.getconn()
-        try:
-            raw.cursor_factory = RealDictCursor
-            # Ensure any previous aborted transaction is cleared
-            try: raw.rollback()
-            except: pass
-            yield raw
-        finally:
-            try: raw.rollback()
-            except: pass
-            _PG_POOL.putconn(raw)
-    else:
-        # pg8000 manual pool — try to return to pool, but fall back to close on errors.
-        recycled = False
-        with _PG_POOL["lock"]:
-            if _PG_POOL["free"]:
-                conn = _PG_POOL["free"].pop()
-            else:
-                if len(_PG_POOL["used"]) < _PG_POOL["max"]:
-                    try:
-                        conn = _pg8000_connect()
-                        _PG_POOL["used"].add(id(conn))
-                    except Exception as e:
-                        raise _PostgresUnavailable(f"connect failed: {e}")
-                else:
-                    # Pool exhausted — make a one-shot connection (don't return to pool)
-                    try:
-                        conn = _pg8000_connect()
-                        recycled = True
-                    except Exception as e:
-                        raise _PostgresUnavailable(f"pool full + connect failed: {e}")
-        # If recycled (one-shot) we don't need the lock/used bookkeeping.
-        if recycled:
-            # Reset any leftover transaction state
-            try: conn.rollback()
-            except: pass
-            try:
-                yield _Pg8000DictConn(conn)
-            finally:
-                try: conn.rollback()
-                except: pass
-                try: conn.close()
-                except: pass
-            return
-        try:
-            # Reset any aborted state from previous user of this connection
-            try: conn.rollback()
-            except: pass
-            yield _Pg8000DictConn(conn)
-        finally:
-            # ALWAYS reset any aborted/pending transaction before returning to pool —
-            # otherwise the next request inherits a '25P02 current transaction is aborted' state.
-            try:
-                conn.rollback()
-            except Exception:
-                # If rollback fails (broken connection), close it instead of returning broken.
-                try: conn.close()
-                except: pass
-                with _PG_POOL["lock"]:
-                    _PG_POOL["used"].discard(id(conn))
-                return
-            with _PG_POOL["lock"]:
-                _PG_POOL["free"].append(conn)
-                _PG_POOL["used"].discard(id(conn))
-
-
-class _Pg8000DictConn:
-    """Wrap pg8000 connection to provide RealDictCursor-like API."""
-
-    def __init__(self, conn):
-        self._conn = conn
-        self._tx_active = False
-
-    def cursor(self):
-        c = self._conn.cursor()
-        return _Pg8000DictCursor(c)
+    def __init__(self, native_cursor, native_conn=None):
+        self._c = native_cursor
+        self._conn = native_conn
 
     def execute(self, sql, params=None):
-        c = self.cursor()
-        return c.execute(sql, params)
+        if params is None:
+            self._c.execute(sql)
+        else:
+            self._c.execute(sql, params)
+        return self
 
-    def executescript(self, sql_script):
-        """SQLite-compatible executescript: split on ';' and run each statement.
-        Empty/whitespace scripts are no-ops.
-        """
-        if not sql_script or not sql_script.strip():
-            return
-        # Strip SQL line comments (-- ...) so split doesn't break on them
-        cleaned_lines = []
-        for line in sql_script.split('\n'):
-            stripped = line.split('--', 1)[0]
-            cleaned_lines.append(stripped)
-        cleaned = '\n'.join(cleaned_lines)
-        for stmt in cleaned.split(';'):
-            stmt = stmt.strip()
-            if not stmt:
-                continue
-            self.execute(stmt)
+    def executemany(self, sql, seq):
+        self._c.executemany(sql, seq)
+        return self
 
-    def commit(self):
-        self._conn.commit()
+    def fetchone(self):
+        return self._c.fetchone()
 
-    def rollback(self):
-        self._conn.rollback()
-
-    def close(self):
-        try:
-            self._conn.close()
-        except Exception:
-            pass
-
-
-class _Pg8000DictCursor:
-    """Wrap pg8000 cursor to provide dict-like rows (mimics psycopg2.extras.RealDictCursor)."""
-
-    def __init__(self, cursor):
-        self._c = cursor
-        self._row_factory = None  # we build dicts ourselves via fetch methods
+    def fetchall(self):
+        return self._c.fetchall()
 
     @property
     def rowcount(self):
@@ -239,40 +50,9 @@ class _Pg8000DictCursor:
     def description(self):
         return self._c.description
 
-    def execute(self, sql, params=None):
-        if params is None:
-            return self._c.execute(sql)
-        return self._c.execute(sql, params)
-
-    def executemany(self, sql, seq):
-        return self._c.executemany(sql, seq)
-
-    def fetchone(self):
-        row = self._c.fetchone()
-        if row is None:
-            return None
-        # pg8000 native cursor returns tuples; description is set after execute.
-        # If a row is already a dict (some drivers), return as-is.
-        if isinstance(row, dict):
-            return row
-        desc = self._c.description
-        if desc:
-            names = [d[0] for d in desc]
-            return dict(zip(names, row))
-        # Fallback: positional access only — caller uses n[0]
-        return row
-
-    def fetchall(self):
-        rows = self._c.fetchall()
-        if not rows:
-            return []
-        if isinstance(rows[0], dict):
-            return rows
-        desc = self._c.description
-        if desc:
-            names = [d[0] for d in desc]
-            return [dict(zip(names, row)) for row in rows]
-        return rows
+    @property
+    def lastrowid(self):
+        return getattr(self._c, "lastrowid", None)
 
     def close(self):
         try:
@@ -280,48 +60,152 @@ class _Pg8000DictCursor:
         except Exception:
             pass
 
+    def commit(self):
+        if self._conn is not None:
+            try:
+                self._conn.commit()
+            except Exception:
+                pass
 
-def db_cursor():
-    """Returns (conn, cursor) pair — for places where main.py uses db_cursor(ctx) pattern."""
-    return get_db_connection()
+    def rollback(self):
+        if self._conn is not None:
+            try:
+                self._conn.rollback()
+            except Exception:
+                pass
+
+    def executescript(self, sql_script):
+        """Run multi-statement script. SQLite native supports this; for psycopg2
+        we split on ';' and run each non-empty statement."""
+        backend = type(self._c).__module__.split(".")[0]
+        if backend == "sqlite3":
+            return self._c.executescript(sql_script)
+        # psycopg2 path: split on ';'
+        for stmt in sql_script.split(";"):
+            s = stmt.strip()
+            # strip SQL line comments
+            cleaned_lines = []
+            for line in s.split("\n"):
+                line_stripped = line.strip()
+                if line_stripped.startswith("--"):
+                    continue
+                cleaned_lines.append(line)
+            cleaned = "\n".join(cleaned_lines).strip()
+            if cleaned:
+                self._c.execute(cleaned)
+        return self
 
 
-def safe_execute(sql, params=None):
-    """Execute a single statement on a FRESH connection (NOT from pool).
-    Use for init_db ALTERs that may leave connections in aborted state.
-    Always closes the connection. Returns True on success, False on error.
-    """
-    if not USE_POSTGRES:
-        import sqlite3
+# ---------- Postgres (psycopg2) ----------
+try:
+    if USE_POSTGRES:
+        import psycopg2
+        import psycopg2.pool as _pool
+
+        _pool_lock = threading.Lock()
+        _pool_obj = None
+
+        def _get_pool():
+            global _pool_obj
+            with _pool_lock:
+                if _pool_obj is None:
+                    _pool_obj = _pool.ThreadedConnectionPool(
+                        minconn=1,
+                        maxconn=10,
+                        dsn=DATABASE_URL,
+                    )
+                return _pool_obj
+
+        @contextmanager
+        def db_cursor():
+            """`with db_cursor() as cur: cur.execute(...).fetchone()`"""
+            pool = _get_pool()
+            conn = pool.getconn()
+            try:
+                try:
+                    conn.rollback()  # clear aborted state
+                except Exception:
+                    pass
+                cur = _CursorAdapter(conn.cursor(), native_conn=conn)
+                try:
+                    yield cur
+                    conn.commit()
+                finally:
+                    cur.close()
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                raise
+            finally:
+                pool.putconn(conn)
+
+        def safe_execute(sql, params=None):
+            """One-shot fresh connection for init_db ALTERs (not from pool)."""
+            try:
+                conn = psycopg2.connect(DATABASE_URL)
+                cur = conn.cursor()
+                cur.execute(sql, params or ())
+                conn.commit()
+                cur.close()
+                conn.close()
+                return True
+            except Exception:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                return False
+
+    else:
+        raise ImportError("SQLite path")
+except ImportError:
+    # ---------- SQLite ----------
+    import sqlite3
+    DB_PATH = os.getenv("DB_PATH", "ibaraholka.db")
+
+    @contextmanager
+    def db_cursor():
+        conn = sqlite3.connect(DB_PATH)
         try:
-            conn = sqlite3.connect(os.getenv("DB_PATH", "ibaraholka.db"))
+            cur = _CursorAdapter(conn.cursor(), native_conn=conn)
+            try:
+                yield cur
+                conn.commit()
+            finally:
+                cur.close()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            conn.close()
+
+    def safe_execute(sql, params=None):
+        try:
+            conn = sqlite3.connect(DB_PATH)
             conn.execute(sql, params or ())
             conn.commit()
             conn.close()
             return True
         except Exception:
-            try: conn.close()
-            except: pass
+            try:
+                conn.close()
+            except Exception:
+                pass
             return False
 
-    try:
-        conn = _pg8000_connect()
-        cur = conn.cursor()
-        cur.execute(sql, params or ())
-        conn.commit()
-        try: conn.close()
-        except: pass
-        return True
-    except Exception:
-        try:
-            conn.rollback()
-            conn.close()
-        except Exception:
-            try: conn.close()
-            except: pass
-        return False
+
+def get_db_connection():
+    """Legacy compat — returns a fresh DB connection (psycopg2 or sqlite3)."""
+    if USE_POSTGRES:
+        return psycopg2.connect(DATABASE_URL)
+    import sqlite3
+    return sqlite3.connect(DB_PATH)
 
 
 def migrate_sqlite_to_pg(*args, **kwargs):
-    """Stub: migration already done in main.py at startup. No-op here."""
     return None
