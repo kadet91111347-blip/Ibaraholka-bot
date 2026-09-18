@@ -13,15 +13,7 @@
 // cleared by the URL itself (?v=…), not by saved-version mismatch.
 (function(){
   try{
-    // TDZ-safe haptic stub — inline onclick не падает с ReferenceError
-    window.haptic=window.haptic||function(k){try{var tg=window.Telegram&&window.Telegram.WebApp;if(tg&&tg.HapticFeedback){tg.HapticFeedback.impactOccurred(k);return;}if(navigator.vibrate){var ms=k==='heavy'?30:k==='medium'?20:k==='success'?15:10;navigator.vibrate(ms);}}catch(_){}};
-    var v='v74';
-    _demoMode = true;
-    try{
-      window.Telegram?.WebApp?.ready?.();
-      window.Telegram?.WebApp?.expand?.();
-      console.log('[v65] tg.platform='+window.Telegram?.WebApp?.platform+' v='+window.Telegram?.WebApp?.version+' initLen='+(window.Telegram?.WebApp?.initData?.length||0)+' user='+JSON.stringify(window.Telegram?.WebApp?.initDataUnsafe?.user||null));
-    }catch(e){console.warn('[v65] init err',e);}
+    var v='v62';
     localStorage.setItem('__ib_version',v);
     var curParams=new URLSearchParams(location.search).get('v');
     if(!curParams||curParams!==v){
@@ -118,7 +110,7 @@ a{color:inherit;text-decoration:none}
 </style>
 </head>
 <body>
-<div id="vmark" style="background:linear-gradient(90deg,#22C55E,#16A34A);padding:10px;text-align:center;font-size:13px;font-weight:700;color:#0B0B0F">v74 · 20:40 · reports (пожаловаться на листинг) + admin moderation</div>
+<div id="vmark" style="background:linear-gradient(90deg,#22C55E,#16A34A);padding:10px;text-align:center;font-size:13px;font-weight:700;color:#0B0B0F">v52 · 00:25 · inline onclick на FAB всегда работает</div>
 <script>
 setTimeout(()=>{const m=document.getElementById('vmark');if(m&&location.search.indexOf('keep')<0)m.style.display='none';},12000);
 </script>
@@ -126,10 +118,8 @@ setTimeout(()=>{const m=document.getElementById('vmark');if(m&&location.search.i
   📱 Чтобы редактировать и удалять объявления — открой через Telegram-бот <b>@Ibaraholka_bot</b> → 🍎 Открыть
 </div>
 <script>
-if(typeof _demoMode==='undefined'||!_demoMode){
-  if(typeof window.Telegram==='undefined'||!window.Telegram.WebApp||!window.Telegram.WebApp.initData){
-    const t=document.getElementById('tgbar');if(t)t.style.display='block';
-  }
+if(typeof window.Telegram==='undefined'||!window.Telegram.WebApp||!window.Telegram.WebApp.initData){
+  const t=document.getElementById('tgbar');if(t)t.style.display='block';
 }
 </script>
 
@@ -161,7 +151,7 @@ if(typeof _demoMode==='undefined'||!_demoMode){
 <nav class="nav">
   <div class="nav-i active" data-t="feed"><div class="nav-i-emoji">🏠</div><div>Лента</div></div>
   <div class="nav-i" data-t="profile"><div class="nav-i-emoji">👤</div><div>Профиль</div></div>
-  <div class="nav-i nav-i-center" data-t="sell" onclick="try{haptic&&haptic('medium');openSell();}catch(e){console.error('[sell]',e);alert('Ошибка: '+e.message);}" style="background:linear-gradient(135deg,#FF8A3D,#FF4D00);color:#0B0B0F;margin-top:-22px;border-radius:50%;width:56px;height:56px;display:flex;flex-direction:column;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(255,138,61,0.4);font-size:24px;font-weight:700;border:3px solid #0B0B0F;cursor:pointer">+</div>
+  <div class="nav-i nav-i-center" data-t="sell" onclick="try{haptic&&haptic('medium');openSellForm(true);}catch(e){console.error('[sell]',e);alert('Ошибка: '+e.message);}" style="background:linear-gradient(135deg,#FF8A3D,#FF4D00);color:#0B0B0F;margin-top:-22px;border-radius:50%;width:56px;height:56px;display:flex;flex-direction:column;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(255,138,61,0.4);font-size:24px;font-weight:700;border:3px solid #0B0B0F;cursor:pointer">+</div>
   <div class="nav-i" data-t="match"><div class="nav-i-emoji">🔔</div><div>Подбор</div></div>
   <div class="nav-i" data-t="refs"><div class="nav-i-emoji">🎁</div><div>Реф</div></div>
 </nav>
@@ -181,10 +171,8 @@ let myId=null;
 const $=(id)=>document.getElementById(id);
 const esc=(s)=>String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const haptic=(k='light')=>{try{const tg=window.Telegram?.WebApp;if(tg?.HapticFeedback){tg.HapticFeedback.impactOccurred(k);return;}if(navigator.vibrate){const ms=k==='heavy'?30:k==='medium'?20:k==='success'?15:10;navigator.vibrate(ms);}}catch(_){}};
-window.haptic=haptic;
 const toast=(m)=>{const d=document.createElement('div');d.className='toast';d.textContent=m;document.body.appendChild(d);setTimeout(()=>d.remove(),2200);};
 function showOpenViaBotModal(){
-  if(typeof _demoMode!=='undefined'&&_demoMode)return;
   const tg=window.Telegram?.WebApp;
   const url='https://t.me/Ibaraholka_bot?start=sell';
   if(tg&&(tg.openTelegramLink||tg.openLink)){
@@ -201,39 +189,15 @@ function showOpenViaBotModal(){
     '</div></div>';
   document.body.insertAdjacentHTML('beforeend',html);
 }
-const _tg=window.Telegram?.WebApp;window.tg=_tg;
-const auth=()=>{
-  if(_tg?.initData?.length>10)return {Authorization:'tma '+_tg.initData};
-  // DEMO MODE: если initData пустой после waitAuth — использовать демо-токен
-  // (бэк с DEMO_MODE=1 принимает любой tma, создаёт user_id=999999)
-  return {Authorization:'tma demo'};
-};
-let _authReady=null;
-const waitAuth=()=>{
-  if(_authReady)return _authReady;
-  _authReady=new Promise((resolve)=>{
-    if(_tg?.initData?.length>10){resolve(true);return;}
-    if(!_tg){resolve(false);return;}
-    let n=0;
-    const tick=()=>{
-      const len=_tg?.initData?.length||0;
-      if(len>10){console.log('[v65] initData ready len='+len);resolve(true);return;}
-      if(++n>100){console.warn('[v65] initData still empty after 10s — tg.platform='+_tg?.platform+' v='+_tg?.version+' initUnsafe.user='+JSON.stringify(_tg?.initDataUnsafe?.user||null));resolve(false);return;}
-      setTimeout(tick,100);
-    };
-    tick();
-  });
-  return _authReady;
-};
+const _tg=window.Telegram?.WebApp;window.tg=_tg;const auth=()=>{return _tg?.initData?{Authorization:'tma '+_tg.initData}:{};};
 const me=()=>{const tg=window.Telegram?.WebApp;return tg?.initDataUnsafe?.user||null;};
 const openLink=(u)=>{const tg=window.Telegram?.WebApp;if(tg?.openLink){tg.openLink(u);}else{window.open(u,'_blank');}};
 const closeModal=()=>{document.querySelectorAll('.mbg').forEach(m=>m.remove());};
 
 const _fetchTimeout=60000;
 function _toPR(p,t){return Promise.race([p,new Promise((_,r)=>setTimeout(()=>r(new Error('network-timeout')),t||_fetchTimeout))]);};
-async function apiGet(p){await waitAuth();const r=await _toPR(fetch(API+p,{cache:'no-store',headers:auth()}),60000);if(!r.ok)throw new Error(r.status);return await r.json();}
+async function apiGet(p){const r=await _toPR(fetch(API+p,{cache:'no-store',headers:auth()}),60000);if(!r.ok)throw new Error(r.status);return await r.json();}
 async function apiPost(p,b){
-  await waitAuth();
   const r=await fetch(API+p,{method:'POST',headers:{...auth(),'Content-Type':'application/json'},body:JSON.stringify(b||{})});
   let j=null;try{j=await r.json();}catch(_){}
   if(!r.ok){
@@ -393,43 +357,6 @@ window.onFav=async function(btn,id){
   }catch(err){toast('Ошибка: '+err.message);}
 };
 
-window.onReport=async function(id,title){
-  haptic('medium');
-  if(!me()){toast('Открой через Telegram-бота');return;}
-  // Простое модальное окно с выбором причины
-  const reasons=[
-    ['spam','🚫 Спам или реклама'],
-    ['fraud','💸 Мошенничество'],
-    ['duplicate','🔁 Дубликат'],
-    ['wrong_category','📂 Не та категория'],
-    ['prohibited','⚠️ Запрещённый товар'],
-    ['other','💬 Другое (с комментарием)'],
-  ];
-  const list=reasons.map(([v,l])=>`<button class="btn-cta" style="background:rgba(28,28,36,0.8);color:#fff;margin-bottom:6px" onclick="document.getElementById('repModal').remove();window._sendReport('${id}','${esc(title||'').replace(/'/g,"\\'")}','${v}')">${l}</button>`).join('');
-  const html=`<div id="repModal" class="mbg" onclick="if(event.target===this)document.getElementById('repModal').remove()"><div class="modal" style="max-width:340px;position:relative">
-    <button class="modal-close" onclick="document.getElementById('repModal').remove()">✕</button>
-    <h2 style="font-size:17px;margin-bottom:6px;text-align:center">⚠️ Пожаловаться</h2>
-    <p style="font-size:13px;color:#a1a1aa;text-align:center;margin-bottom:14px">«${esc(title||'объявление')}»</p>
-    <div style="display:flex;flex-direction:column">${list}</div>
-    <p style="font-size:11px;color:#71717a;text-align:center;margin-top:12px">Жалоба увидит только админ</p>
-  </div></div>`;
-  document.body.insertAdjacentHTML('beforeend',html);
-};
-
-window._sendReport=async function(id,title,reason){
-  try{
-    let comment=null;
-    if(reason==='other'){
-      comment=prompt('Опиши проблему:');
-      if(!comment){return;}
-    }
-    const r=await apiPost('/reports/'+id,{reason:reason,comment:comment||''});
-    if(r&&r.ok){toast('✅ Жалоба отправлена. Спасибо!');}
-    else if(r&&r.error==='already_reported'){toast('Ты уже жаловался на это объявление');}
-    else{toast('Ошибка: '+(r&&r.error||'неизвестно'));}
-  }catch(err){toast('Ошибка сети: '+err.message);}
-};
-
 // No global click handler — inline onclick handles everything
 
 async function openDetail(id){
@@ -474,7 +401,7 @@ async function openDetail(id){
          <button class="btn-cta" style="width:100%;background:linear-gradient(135deg,#EF4444,#DC2626);color:#fff" onclick="onDelete('${id}',this);closeModal()">🗑 Удалить объявление</button>`
         :`<button class="btn-cta" style="width:100%;background:linear-gradient(135deg,#FF8A3D,#FF4D00);color:#0B0B0F" onclick="onWrite('${esc(username)}','${esc(l.title||username)}');closeModal()">💬 Написать продавцу</button>
          <button class="btn-cta" style="width:100%;background:linear-gradient(135deg,#22C55E,#16A34A);color:#fff" onclick="onGuarant('${id}','${(l.title||'').replace(/'/g,"\\'")}',${l.price||0});closeModal()">🛡 Купить с гарантом</button>
-         <button class="btn-cta" style="width:100%;background:linear-gradient(135deg,#EF4444,#DC2626);color:#fff" onclick="onReport('${id}','${(l.title||'').replace(/'/g,"\\'")}');closeModal()">🚩 Пожаловаться</button>`}
+         <button class="btn-cta" style="width:100%;background:linear-gradient(135deg,#EF4444,#DC2626);color:#fff" onclick="onDelete('${id}',this);closeModal()">🗑 Пожаловаться</button>`}
       ${!isMine?`<button class="btn-cta" style="width:100%;background:#26262E;color:#fff" onclick="onShare('${id}','${esc(l.title||username)}')">📤 Поделиться</button>`:''}
     </div>
   </div></div>`;
@@ -482,8 +409,6 @@ async function openDetail(id){
 }
 
 function openSellForm(showWarning){
-  // DEMO MODE: скрыть warning независимо от параметра
-  if(typeof _demoMode!=='undefined'&&_demoMode){showWarning=false;}
   haptic('medium');
   const tg=window.Telegram?.WebApp;
   const warningHtml = showWarning
@@ -600,25 +525,6 @@ function openSellForm(showWarning){
       haptic('error');
       // 401 = не авторизован — юзер открыл НЕ через бота. Показываем модалку с инструкцией.
       if(e.status===401){
-        console.log('[v64] got 401 — retrying after waitAuth...');
-        toast('⏳ Ждём авторизацию Telegram…');
-        _authReady=null;
-        const ok=await waitAuth();
-        if(ok){
-          try{
-            const retry=await apiPost('/listings',{title,description:desc,price,cat,type,contact:'@'+(window.tg?.initDataUnsafe?.user?.username||'user'),tier,city});
-            if(!(retry.ok||retry.id))throw new Error(retry.error||'retry_failed');
-            createdId=retry.id;
-            window.__lastListingId=createdId;
-            window.__lastTier=tier;
-            toast('✅ Объявление создано!');
-            haptic('success');
-            closeModal();
-            await loadListings();
-            btn.disabled=false;btn.textContent='Опубликовать';
-            return;
-          }catch(e2){console.error('[v64] retry failed',e2);}
-        }
         showOpenViaBotModal();
       }
       return; // НЕ закрываем модалку
@@ -678,18 +584,15 @@ function openSellForm(showWarning){
         const amount=parseInt(tBtn.dataset.amount)||0;
         // v62: НЕ зовём /payments/yukassa/create — он возвращает битый URL без /aHI4Y75190 (Тиньков → 404).
         // Используем напрямую захардкоженный правильный URL.
-        const url='https://www.tinkoff.ru/rm/r_TGugYbYVEb.mLmrPUwlTy/aHI4Y75190?amount='+(amount*100)+'&successURL=https://t.me/Ibaraholka_bot';
-        console.log('[v63 payTbank] url:',url);
-        // v63: openLink с try_in_app_browser — на Android открывается через Telegram in-app browser
-        // + fallback на window.location.href если WebView не закрылся за 800мс
+        const url='https://www.tbank.ru/rm/r_TGugYbYVEb.mLmrPUwlTy/aHI4Y75190?amount='+(amount*100)+'&successURL=https://t.me/Ibaraholka_bot';
         const tg=window.Telegram?.WebApp;
         if(tg&&tg.openLink){
-          try{tg.openLink(url,{try_in_app_browser:true});}catch(e){console.error('[v63] openLink err',e);}
+          tg.openLink(url);
           haptic('success');
-          toast('🏦 Открываю Т-Банк...');
-          setTimeout(()=>{if(document.visibilityState==='visible'){console.log('[v63] openLink не сработал — fallback location.href');window.location.href=url;}},800);
+          toast('🏦 Открываю Т-Банк — оплати и вернись сюда');
         }else{
-          window.location.href=url;
+          // fallback: копируем в clipboard + показываем url
+          try{navigator.clipboard.writeText(url);toast('✅ Ссылка скопирована — открой в браузере');}catch(e){toast('Ссылка: '+url);}
         }
       };
     }
@@ -701,14 +604,12 @@ function openSellForm(showWarning){
         const tier=sBtn.dataset.tier;
         const tg=window.Telegram?.WebApp;
         const url='https://t.me/Ibaraholka_bot?start=pay_'+encodeURIComponent(listingId+'_'+tier);
-        console.log('[v63 payStars] url:',url);
-        // v63: openTelegramLink всегда работает внутри Telegram
         if(tg&&tg.openTelegramLink){
           tg.openTelegramLink(url);
           haptic('success');
           toast('⭐ Открываю бота для оплаты Звёздами');
         }else{
-          window.location.href=url;
+          try{navigator.clipboard.writeText(url);toast('✅ Ссылка скопирована');}catch(e){}
         }
       };
     }
@@ -905,11 +806,6 @@ function openSell(){
   const tg=window.Telegram?.WebApp;
   const tgUrl='https://t.me/Ibaraholka_bot?start=sell';
   if(!tg||!tg.initData){
-    if(typeof _demoMode!=='undefined'&&_demoMode){
-      // DEMO MODE: сразу открываем форму без warning
-      openSellForm(false);
-      return;
-    }
     // Предупреждение перед формой
     toast('⚠️ Открой через @Ibaraholka_bot → 🚀 Запустить, чтобы публиковать');
     openSellForm(true);

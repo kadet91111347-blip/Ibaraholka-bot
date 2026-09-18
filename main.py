@@ -450,6 +450,22 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_ton_payments_listing ON ton_payments(listing_id, created DESC);
         CREATE INDEX IF NOT EXISTS idx_ton_payments_comment ON ton_payments(comment);
+
+        -- ===== REPORTS — жалобы на листинги =====
+        CREATE TABLE IF NOT EXISTS reports (
+            id BIGINT,
+            listing_id TEXT NOT NULL,
+            reporter_id BIGINT NOT NULL,
+            reason TEXT NOT NULL,
+            comment TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',  -- pending|reviewed|dismissed|action_taken
+            resolved_by BIGINT,
+            resolved_at BIGINT,
+            created BIGINT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_reports_listing ON reports(listing_id);
+        CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status, created DESC);
+        CREATE INDEX IF NOT EXISTS idx_reports_reporter ON reports(reporter_id, created DESC);
         """)
 
     # Schema upgrades — cross-DB (SQLite + Postgres).
@@ -3808,8 +3824,8 @@ async def deals_post_message(deal_id: str, request: Request, user: Dict = Depend
             return {"ok": False, "error": "not_party"}
         conn.execute(
             "INSERT INTO deal_messages (id, deal_id, from_user_id, text, photo_url, created) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (deal_id, user_id, text or None, photo_url or None, now),
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (_next_id(), deal_id, user_id, text or None, photo_url or None, now),
         )
         conn.commit()
     return {"ok": True, "deal_id": deal_id}
@@ -5478,6 +5494,134 @@ async def admin_wipe_all_listings(request: Request):
         return {"ok": False, "error": str(e)}
 
 
+# ============================================================
+# REPORTS — жалобы на листинги (модерация через сообщество)
+# ============================================================
+ALLOWED_REPORT_REASONS = {
+    "spam", "fraud", "duplicate", "wrong_category", "prohibited", "other",
+}
+
+
+@app.post("/reports/{listing_id}")
+async def reports_create(listing_id: str, request: Request, user: Dict = Depends(get_user)):
+    """Пожаловаться на объявление. Один пользователь — одна жалоба на листинг."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    reason = (body.get("reason") or "").strip().lower()
+    comment = (body.get("comment") or "").strip()[:500]
+
+    if reason not in ALLOWED_REPORT_REASONS:
+        return {"ok": False, "error": "invalid_reason", "allowed": sorted(ALLOWED_REPORT_REASONS)}
+
+    reporter_id = int(user["id"])
+    now = int(time.time())
+    try:
+        with db_cursor() as conn:
+            row = conn.execute("SELECT id, user_id, status FROM listings WHERE id=?", (listing_id,)).fetchone()
+            if not row:
+                return {"ok": False, "error": "listing_not_found"}
+            seller_id = int(row["user_id"] if isinstance(row, dict) else row[1])
+            if seller_id == reporter_id:
+                return {"ok": False, "error": "cannot_report_own"}
+
+            existing = conn.execute(
+                "SELECT id FROM reports WHERE listing_id=? AND reporter_id=?",
+                (listing_id, reporter_id),
+            ).fetchone()
+            if existing:
+                return {"ok": False, "error": "already_reported", "report_id": (existing["id"] if isinstance(existing, dict) else existing[0])}
+
+            rid = _next_id()
+            conn.execute(
+                "INSERT INTO reports (id, listing_id, reporter_id, reason, comment, status, created) "
+                "VALUES (?, ?, ?, ?, ?, 'pending', ?)",
+                (rid, listing_id, reporter_id, reason, comment or None, now),
+            )
+            conn.commit()
+        return {"ok": True, "report_id": rid, "listing_id": listing_id, "reason": reason}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"reports_create failed: {e}")
+        return {"ok": False, "error": str(e)[:200]}
+
+
+@app.get("/admin/reports")
+async def admin_reports(status: str = "pending", limit: int = 100, authorization: str = Header(None)):
+    """Список жалоб для админа. Фильтр по статусу: pending|reviewed|dismissed|action_taken."""
+    if authorization != f"tma {ADMIN_TOKEN}" and authorization != ADMIN_TOKEN:
+        raise HTTPException(403, "Admin token required")
+    limit = min(max(limit, 1), 500)
+    try:
+        with db_cursor() as conn:
+            rows = conn.execute(
+                "SELECT id, listing_id, reporter_id, reason, comment, status, resolved_by, resolved_at, created "
+                "FROM reports WHERE status=? ORDER BY created DESC LIMIT ?",
+                (status, limit),
+            ).fetchall()
+            out = [_row_to_dict(r, ["id", "listing_id", "reporter_id", "reason", "comment", "status", "resolved_by", "resolved_at", "created"]) for r in rows]
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+    return {"ok": True, "status": status, "count": len(out), "reports": out}
+
+
+@app.post("/admin/reports/{report_id}/resolve")
+async def admin_resolve_report(report_id: int, request: Request, authorization: str = Header(None)):
+    """Пометить жалобу как обработанную.
+
+    Body: {action: 'dismiss' | 'action_taken', delete_listing: bool}
+    Если delete_listing=true — листинг удаляется и из канала.
+    """
+    if authorization != f"tma {ADMIN_TOKEN}" and authorization != ADMIN_TOKEN:
+        raise HTTPException(403, "Admin token required")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    action = (body.get("action") or "").strip()
+    delete_listing = bool(body.get("delete_listing", False))
+
+    if action not in ("dismiss", "action_taken"):
+        return {"ok": False, "error": "action must be dismiss|action_taken"}
+
+    new_status = "dismissed" if action == "dismiss" else "action_taken"
+    now = int(time.time())
+
+    with db_cursor() as conn:
+        r = conn.execute("SELECT id, listing_id, status FROM reports WHERE id=?", (report_id,)).fetchone()
+        if not r:
+            return {"ok": False, "error": "report_not_found"}
+        if (r["status"] if isinstance(r, dict) else r[2]) != "pending":
+            return {"ok": False, "error": "already_resolved"}
+        listing_id = r["listing_id"] if isinstance(r, dict) else r[1]
+        conn.execute(
+            "UPDATE reports SET status=?, resolved_by=1, resolved_at=? WHERE id=? AND status='pending'",
+            (new_status, now, report_id),
+        )
+        deleted_listing = False
+        ch_msg_deleted = False
+        if delete_listing and listing_id:
+            row = conn.execute("SELECT channel_message_id FROM listings WHERE id=?", (listing_id,)).fetchone()
+            ch_msg_id = row["channel_message_id"] if row else None
+            conn.execute("DELETE FROM listings WHERE id=?", (listing_id,))
+            deleted_listing = True
+            if ch_msg_id:
+                try:
+                    ch_msg_deleted = await delete_from_channel(ch_msg_id)
+                except Exception:
+                    ch_msg_deleted = False
+        conn.commit()
+    return {
+        "ok": True,
+        "report_id": report_id,
+        "new_status": new_status,
+        "deleted_listing": deleted_listing,
+        "channel_deleted": ch_msg_deleted,
+    }
+
+
 @app.post("/listings/{listing_id}/confirm-paid")
 async def confirm_paid_http(listing_id: str, request: Request):
     """HTTP counterpart of the Telegram `confirm_paid:` callback.
@@ -6229,7 +6373,7 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789750000 v72: idempotency guards — UPDATE listings SET status='paid' WHERE status='awaiting_payment' (4 places), payment_idempotency_key column + INSERT
+# deploy-trigger 1789751000 v72: idempotency guards — UPDATE listings SET status='paid' WHERE status='awaiting_payment' (4 places), payment_idempotency_key column + INSERT
 
 
 # --- deploy-marker-62cfc55: clear-cache signal ---
