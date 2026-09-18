@@ -37,10 +37,28 @@ class _CursorAdapter:
         return self
 
     def fetchone(self):
-        return self._c.fetchone()
+        row = self._c.fetchone()
+        if row is None:
+            return None
+        if isinstance(row, dict):
+            return row
+        desc = self._c.description
+        if desc:
+            return dict(zip([d[0] for d in desc], row))
+        return row
 
     def fetchall(self):
-        return self._c.fetchall()
+        rows = self._c.fetchall()
+        if not rows:
+            return rows
+        first = rows[0]
+        if isinstance(first, dict):
+            return rows
+        desc = self._c.description
+        if not desc:
+            return rows
+        cols = [d[0] for d in desc]
+        return [dict(zip(cols, r)) for r in rows]
 
     @property
     def rowcount(self):
@@ -100,6 +118,7 @@ class _CursorAdapter:
 try:
     if USE_POSTGRES:
         import psycopg2
+        import psycopg2.extras  # ensure RealDictCursor class is loaded
         import psycopg2.pool as _pool
 
         _pool_lock = threading.Lock()
