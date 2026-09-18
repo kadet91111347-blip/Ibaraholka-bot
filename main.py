@@ -1605,7 +1605,7 @@ async def mini_app():
         "Expires": "0",
     })
 
-@app.get("/mini/{filename}")
+@app.get("/mini/{filename:path}")
 async def mini_static(filename: str):
     from fastapi.responses import HTMLResponse, FileResponse
     p = MINIAPP_DIR / filename
