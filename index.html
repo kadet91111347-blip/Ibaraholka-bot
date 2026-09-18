@@ -13,7 +13,7 @@
 // cleared by the URL itself (?v=…), not by saved-version mismatch.
 (function(){
   try{
-    var v='v60';
+    var v='v61';
     localStorage.setItem('__ib_version',v);
     var curParams=new URLSearchParams(location.search).get('v');
     if(!curParams||curParams!==v){
@@ -559,9 +559,9 @@ function openSellForm(showWarning){
 
         <p style="font-size:12px;color:#a1a1aa;text-align:center;margin:0 0 12px;line-height:1.4">👇 Нажми на удобный способ. После оплаты вернись сюда ↓</p>
 
-        <a id="payTbankBtn" href="https://www.tbank.ru/rm/r_TGugYbYVEb.mLmrPUwlTy/aHI4Y75190" target="_blank" rel="noopener" onclick="try{var __tg=window.Telegram&&window.Telegram.WebApp;if(__tg&&__tg.openLink){__tg.openLink(this.href);return false;}}catch(_e){}return true;" class="btn-cta" style="display:flex;align-items:center;justify-content:space-between;background:linear-gradient(135deg,#FFDD2D,#FFB800);color:#0B0B0F;font-weight:700;padding:14px 16px;border-radius:12px;text-decoration:none;margin-bottom:8px"><span style="font-size:22px">💳</span><span style="flex:1;text-align:left;margin-left:12px">Т-Банк · ${amount} ₽</span><span style="font-size:18px">→</span></a>
+        <button id="payTbankBtn" type="button" data-listing-id="${createdId}" data-tier="${tier}" data-amount="${amount}" class="btn-cta" style="display:flex;align-items:center;justify-content:space-between;background:linear-gradient(135deg,#FFDD2D,#FFB800);color:#0B0B0F;font-weight:700;padding:14px 16px;border-radius:12px;border:0;margin-bottom:8px;font-size:15px;cursor:pointer;width:100%;text-align:left"><span style="font-size:22px">💳</span><span style="flex:1;text-align:left;margin-left:12px">Т-Банк · ${amount} ₽</span><span style="font-size:18px">→</span></button>
 
-        <a id="payStarsBtn" href="https://t.me/Ibaraholka_bot?start=pay_${createdId}_${tier}" target="_blank" rel="noopener" onclick="try{var __sg=window.Telegram&&window.Telegram.WebApp;if(__sg&&__sg.openTelegramLink){__sg.openTelegramLink(this.href);return false;}}catch(_e){}return true;" class="btn-cta" style="display:flex;align-items:center;justify-content:space-between;background:linear-gradient(135deg,#FFD75E,#FFB800);color:#0B0B0F;font-weight:700;padding:14px 16px;border-radius:12px;text-decoration:none;margin-bottom:8px"><span style="font-size:22px">⭐</span><span style="flex:1;text-align:left;margin-left:12px">Звёзды Telegram · ${stars} ★</span><span style="font-size:18px">→</span></a>
+        <button id="payStarsBtn" type="button" data-listing-id="${createdId}" data-tier="${tier}" class="btn-cta" style="display:flex;align-items:center;justify-content:space-between;background:linear-gradient(135deg,#FFD75E,#FFB800);color:#0B0B0F;font-weight:700;padding:14px 16px;border-radius:12px;border:0;margin-bottom:8px;font-size:15px;cursor:pointer;width:100%;text-align:left"><span style="font-size:22px">⭐</span><span style="flex:1;text-align:left;margin-left:12px">Звёзды Telegram · ${stars} ★</span><span style="font-size:18px">→</span></button>
 
         <button id="payTonBtn" type="button" class="btn-cta" style="display:flex;align-items:center;justify-content:space-between;background:linear-gradient(135deg,#0098EA,#0078C8);color:#fff;font-weight:700;padding:14px 16px;border-radius:12px;border:0;margin-bottom:10px;font-size:14px;box-shadow:0 4px 16px rgba(0,152,234,.4);cursor:pointer;width:100%"><span style="font-size:22px">💎</span><span style="flex:1;text-align:left;margin-left:12px">TON · ${tier==='vip'?'0.75':'0.25'} TON</span><span style="font-size:18px">📋</span></button>
 
@@ -574,11 +574,50 @@ function openSellForm(showWarning){
         <button class="btn-cta" style="width:100%;background:transparent;color:#a1a1aa;margin-top:10px;border:0;cursor:pointer;font-size:13px" onclick="closeModal()">Оплачу позже</button>
       </div></div>`;
       document.body.insertAdjacentHTML('beforeend',html);
-    // Заполняем href у Т-Банк кнопки из последнего yukassa response
-    if(window.__lastYukassaUrl){
-      const tBtn=document.getElementById('payTbankBtn');
-      if(tBtn){tBtn.href=window.__lastYukassaUrl;tBtn.setAttribute('target','_blank');tBtn.setAttribute('rel','noopener');tBtn.onclick=function(e){e.preventDefault();window.location.href=window.__lastYukassaUrl;return false;};}
+    // v61: handler для payTbankBtn/payStarsBtn (button, не anchor)
+    const tBtn=document.getElementById('payTbankBtn');
+    if(tBtn){
+      tBtn.onclick=async(e)=>{
+        e.preventDefault();
+        const listingId=tBtn.dataset.listingId;
+        const tier=tBtn.dataset.tier;
+        const amount=parseInt(tBtn.dataset.amount)||0;
+        // Перед openLink зовём бэк /payments/yukassa/create чтобы получить актуальный url
+        let url='https://www.tbank.ru/rm/r_TGugYbYVEb.mLmrPUwlTy/aHI4Y75190?amount='+(amount*100)+'&successURL=https://t.me/Ibaraholka_bot';
+        try{
+          const r=await apiPost('/payments/yukassa/create',{listing_id:listingId,tier,user_id:window.tg?.initDataUnsafe?.user?.id||0});
+          if(r&&(r.tinkoff_url||r.confirmation_url))url=r.tinkoff_url||r.confirmation_url;
+        }catch(_e){}
+        const tg=window.Telegram?.WebApp;
+        if(tg&&tg.openLink){
+          tg.openLink(url);
+          haptic('success');
+          toast('🏦 Открываю Т-Банк — оплати и вернись сюда');
+        }else{
+          // fallback: копируем в clipboard + показываем url
+          try{navigator.clipboard.writeText(url);toast('✅ Ссылка скопирована — открой в браузере');}catch(e){toast('Ссылка: '+url);}
+        }
+      };
     }
+    const sBtn=document.getElementById('payStarsBtn');
+    if(sBtn){
+      sBtn.onclick=async(e)=>{
+        e.preventDefault();
+        const listingId=sBtn.dataset.listingId;
+        const tier=sBtn.dataset.tier;
+        const tg=window.Telegram?.WebApp;
+        const url='https://t.me/Ibaraholka_bot?start=pay_'+encodeURIComponent(listingId+'_'+tier);
+        if(tg&&tg.openTelegramLink){
+          tg.openTelegramLink(url);
+          haptic('success');
+          toast('⭐ Открываю бота для оплаты Звёздами');
+        }else{
+          try{navigator.clipboard.writeText(url);toast('✅ Ссылка скопирована');}catch(e){}
+        }
+      };
+    }
+    // Заполняем href у Т-Банк кнопки из последнего yukassa response
+    // v61: убрали target=_blank override (теперь button + tg.openLink)
     // Назначаем обработчик "✅ Я оплатил"
     const cBtn=document.getElementById('confirmPaidBtn');
     if(cBtn){
