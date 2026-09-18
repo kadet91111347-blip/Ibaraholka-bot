@@ -15,7 +15,7 @@
   try{
     // TDZ-safe haptic stub — inline onclick не падает с ReferenceError
     window.haptic=window.haptic||function(k){try{var tg=window.Telegram&&window.Telegram.WebApp;if(tg&&tg.HapticFeedback){tg.HapticFeedback.impactOccurred(k);return;}if(navigator.vibrate){var ms=k==='heavy'?30:k==='medium'?20:k==='success'?15:10;navigator.vibrate(ms);}}catch(_){}};
-    var v='v69';
+    var v='v70';
     _demoMode = true;
     try{
       window.Telegram?.WebApp?.ready?.();
@@ -118,7 +118,7 @@ a{color:inherit;text-decoration:none}
 </style>
 </head>
 <body>
-<div id="vmark" style="background:linear-gradient(90deg,#22C55E,#16A34A);padding:10px;text-align:center;font-size:13px;font-weight:700;color:#0B0B0F">v69 · 18:05 · fix _demoMode global scope (was inside IIFE, unreachable for guards)</div>
+<div id="vmark" style="background:linear-gradient(90deg,#22C55E,#16A34A);padding:10px;text-align:center;font-size:13px;font-weight:700;color:#0B0B0F">v70 · 18:14 · FAB onclick now uses openSell() (has demo guard); openSellForm auto-disables warning in demo</div>
 <script>
 setTimeout(()=>{const m=document.getElementById('vmark');if(m&&location.search.indexOf('keep')<0)m.style.display='none';},12000);
 </script>
@@ -161,7 +161,7 @@ if(typeof _demoMode==='undefined'||!_demoMode){
 <nav class="nav">
   <div class="nav-i active" data-t="feed"><div class="nav-i-emoji">🏠</div><div>Лента</div></div>
   <div class="nav-i" data-t="profile"><div class="nav-i-emoji">👤</div><div>Профиль</div></div>
-  <div class="nav-i nav-i-center" data-t="sell" onclick="try{haptic&&haptic('medium');openSellForm(true);}catch(e){console.error('[sell]',e);alert('Ошибка: '+e.message);}" style="background:linear-gradient(135deg,#FF8A3D,#FF4D00);color:#0B0B0F;margin-top:-22px;border-radius:50%;width:56px;height:56px;display:flex;flex-direction:column;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(255,138,61,0.4);font-size:24px;font-weight:700;border:3px solid #0B0B0F;cursor:pointer">+</div>
+  <div class="nav-i nav-i-center" data-t="sell" onclick="try{haptic&&haptic('medium');openSell();}catch(e){console.error('[sell]',e);alert('Ошибка: '+e.message);}" style="background:linear-gradient(135deg,#FF8A3D,#FF4D00);color:#0B0B0F;margin-top:-22px;border-radius:50%;width:56px;height:56px;display:flex;flex-direction:column;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(255,138,61,0.4);font-size:24px;font-weight:700;border:3px solid #0B0B0F;cursor:pointer">+</div>
   <div class="nav-i" data-t="match"><div class="nav-i-emoji">🔔</div><div>Подбор</div></div>
   <div class="nav-i" data-t="refs"><div class="nav-i-emoji">🎁</div><div>Реф</div></div>
 </nav>
@@ -445,6 +445,8 @@ async function openDetail(id){
 }
 
 function openSellForm(showWarning){
+  // DEMO MODE: скрыть warning независимо от параметра
+  if(typeof _demoMode!=='undefined'&&_demoMode){showWarning=false;}
   haptic('medium');
   const tg=window.Telegram?.WebApp;
   const warningHtml = showWarning
