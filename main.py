@@ -459,16 +459,18 @@ async def get_user(authorization: str = Header(None)) -> Dict[str, Any]:
     When initData is provided but signature validation fails, we still try to extract
     the user from initData params so demos still work but as real-looking users.
     """
-    if not authorization or not authorization.startswith("tma "):
-        # Special case: header "tma demo" → bypass auth in DEMO_MODE
-        if authorization == "tma demo" and DEMO_MODE:
-            # Accept demo request (bypasses Telegram auth for browser testing)
+    # Special case: header "tma demo" → bypass auth in DEMO_MODE (for browser testing)
+    if authorization == "tma demo":
+        if DEMO_MODE:
             return {
                 "id": 999999,
                 "first_name": "Demo",
                 "username": "Izdelie0810",
                 "_demo": True,
             }
+        raise HTTPException(401, "DEMO_MODE not enabled")
+
+    if not authorization or not authorization.startswith("tma "):
         raise HTTPException(401, "Authorization header required: 'tma <initData>'")
 
     raw = authorization[4:]
@@ -6058,4 +6060,4 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789739133 fix: get_user accepts header "tma demo" in DEMO_MODE
+# deploy-trigger 1789739372 fix: get_user handles tma demo in PROPER branch (before not authorization check)
