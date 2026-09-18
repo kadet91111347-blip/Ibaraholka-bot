@@ -1,0 +1,21 @@
+name: Deploy to Render
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Render Deploy Hook
+        env:
+          RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$RENDER_DEPLOY_HOOK" ]; then
+            echo "RENDER_DEPLOY_HOOK secret is empty — set it in GitHub Settings → Secrets"
+            exit 1
+          fi
+          echo "Triggering: $RENDER_DEPLOY_HOOK"
+          curl -s -X POST "$RENDER_DEPLOY_HOOK" -o /dev/null -w "HTTP: %{http_code}\n"
