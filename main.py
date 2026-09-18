@@ -66,6 +66,14 @@ ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "").strip()
 # On production (no RENDER env var) defaults to 0 — requires real Telegram initData.
 _demo_default = "1" if os.getenv("RENDER") else "0"
 DEMO_MODE = os.getenv("DEMO_MODE", _demo_default).strip() == "1"
+# Runtime override: None = use DEMO_MODE env, True/False = force on/off
+# Allows admins to toggle without redeploying (see /admin/demo-mode endpoint)
+_DEMO_RUNTIME = None
+
+def _is_demo_enabled() -> bool:
+    if _DEMO_RUNTIME is not None:
+        return _DEMO_RUNTIME
+    return DEMO_MODE
 
 # Don't crash if BOT_TOKEN missing — start API anyway, log warning
 if not BOT_TOKEN:
@@ -1917,7 +1925,7 @@ async def create_listing(item: ListingIn, request: Request):
         is_demo_user = False  # Admin acts as a real user for invoice purposes
     else:
         user = await get_user(request.headers.get("authorization", ""))
-        is_demo_user = user.get("_demo", False)
+        is_demo_user = user.get("_demo", False) and _is_demo_enabled()
 
     print(f"[CREATE_LISTING] User: id={user.get('id')}, demo={is_demo_user}, admin={is_admin}, name={user.get('first_name')}", flush=True)
     try:
@@ -5533,6 +5541,35 @@ async def admin_listings(admin_token: str = ""):
             "FROM listings ORDER BY created DESC"
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+@app.post("/admin/demo-mode")
+async def admin_toggle_demo(payload: dict, admin_token: str = ""):
+    """Toggle DEMO_MODE at runtime without redeploying.
+    Body: {"enabled": true|false|null} — null = reset to env var default
+    Pass ?admin_token=... (ADMIN_TOKEN env var)
+    """
+    global _DEMO_RUNTIME
+    if admin_token != ADMIN_TOKEN:
+        raise HTTPException(403, "Admin token required")
+    if "enabled" not in payload:
+        raise HTTPException(400, "Field 'enabled' (true|false|null) required")
+    val = payload["enabled"]
+    if val is None:
+        _DEMO_RUNTIME = None
+    elif isinstance(val, bool):
+        _DEMO_RUNTIME = val
+    else:
+        raise HTTPException(400, "Field 'enabled' must be bool or null")
+    return {
+        "ok": True,
+        "DEMO_MODE_env": DEMO_MODE,
+        "DEMO_MODE_runtime_override": _DEMO_RUNTIME,
+        "DEMO_MODE_effective": _is_demo_enabled(),
+    }
+
+
+@app.get("/admin/demo-mode")
 
 
 @app.get("/admin/stats")
