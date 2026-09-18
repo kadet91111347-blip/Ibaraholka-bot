@@ -13,7 +13,7 @@
 // cleared by the URL itself (?v=…), not by saved-version mismatch.
 (function(){
   try{
-    var v='v54';
+    var v='v59';
     localStorage.setItem('__ib_version',v);
     var curParams=new URLSearchParams(location.search).get('v');
     if(!curParams||curParams!==v){
@@ -135,9 +135,18 @@ if(typeof window.Telegram==='undefined'||!window.Telegram.WebApp||!window.Telegr
 </div>
 
 <div class="stats">
-  <div class="stat n" data-mode="all" onclick="statMode='all';render();buildFilters();"><div class="stat-n" id="sTotal">–</div><div class="stat-l">всего</div></div>
-  <div class="stat" data-mode="today" onclick="statMode='today';render();buildFilters();"><div class="stat-n" id="sToday">–</div><div class="stat-l">сегодня</div></div>
-  <div class="stat" data-mode="avail" onclick="statMode='avail';render();buildFilters();"><div class="stat-n" id="sAvail">–</div><div class="stat-l">активных</div></div>
+  <div class="stat n" data-mode="all" onclick="statMode='all';render();buildFilters();
+const _fetchTimeout=60000;
+function _toPR(p,t){return Promise.race([p,new Promise((_,r)=>setTimeout(()=>r(new Error('network-timeout')),t||_fetchTimeout))]);}
+"><div class="stat-n" id="sTotal">–</div><div class="stat-l">всего</div></div>
+  <div class="stat" data-mode="today" onclick="statMode='today';render();buildFilters();
+const _fetchTimeout=60000;
+function _toPR(p,t){return Promise.race([p,new Promise((_,r)=>setTimeout(()=>r(new Error('network-timeout')),t||_fetchTimeout))]);}
+"><div class="stat-n" id="sToday">–</div><div class="stat-l">сегодня</div></div>
+  <div class="stat" data-mode="avail" onclick="statMode='avail';render();buildFilters();
+const _fetchTimeout=60000;
+function _toPR(p,t){return Promise.race([p,new Promise((_,r)=>setTimeout(()=>r(new Error('network-timeout')),t||_fetchTimeout))]);}
+"><div class="stat-n" id="sAvail">–</div><div class="stat-l">активных</div></div>
 </div>
 
 <div class="filters" id="filters"></div>
@@ -191,7 +200,7 @@ const me=()=>{const tg=window.Telegram?.WebApp;return tg?.initDataUnsafe?.user||
 const openLink=(u)=>{const tg=window.Telegram?.WebApp;if(tg?.openLink){tg.openLink(u);}else{window.open(u,'_blank');}};
 const closeModal=()=>{document.querySelectorAll('.mbg').forEach(m=>m.remove());};
 
-async function apiGet(p){const r=await fetch(API+p,{cache:'no-store',headers:auth()});if(!r.ok)throw new Error(r.status);return await r.json();}
+async function apiGet(p){const r=await _toPR(fetch(API+p,{cache:'no-store',headers:auth()}),60000);if(!r.ok)throw new Error(r.status);return await r.json();}
 async function apiPost(p,b){
   const r=await fetch(API+p,{method:'POST',headers:{...auth(),'Content-Type':'application/json'},body:JSON.stringify(b||{})});
   let j=null;try{j=await r.json();}catch(_){}
@@ -526,11 +535,14 @@ function openSellForm(showWarning){
     }
     closeModal();
     await loadListings();
-    // Для платных тарифов — показываем модалку с инструкцией (БЕЗ внешних ссылок)
+    // Для платных тарифов — v55: сразу открываем Т-Банк через /payments/yukassa/create + window.location.href
     if(tier!=='free'){
-      const tg=window.Telegram?.WebApp;
       const stars=tier==='vip'?150:50;
       const amount=tier==='vip'?750:250;
+      // v58: yukassa удалён — 3 кнопки оплаты
+      // Fallback: модалка с реквизитами Тинькофф + TON (если redirect не сработал)
+      // Fallback: модалка с реквизитами Тинькофф + TON (если redirect не сработал)
+      const tg=window.Telegram?.WebApp;
       const botUrl='https://t.me/Ibaraholka_bot?start='+encodeURIComponent('pay_'+createdId+'_'+tier);
       // Реквизиты для оплаты
       const card='2200 7007 2222 5678';          // Тинькофф
@@ -547,24 +559,66 @@ function openSellForm(showWarning){
           <div style="display:flex;justify-content:space-between;padding:4px 0"><span>Длительность</span><b style="color:#fff">${tier==='vip'?'7 дней':'24 часа'}</b></div>
         </div>
 
-        <p style="font-size:13px;font-weight:700;margin:0 0 6px">⭐ Способ 1: Telegram Звёзды</p>
-        <p style="font-size:12px;color:#a1a1aa;margin:0 0 8px">Проще всего. Бот пришлёт инвойс в личку — нажми и оплати.</p>
-        <button class="btn-cta" style="width:100%;background:linear-gradient(135deg,#FFB800,#FF8C00);color:#0B0B0F;font-weight:700;padding:14px;border-radius:12px;border:0;font-size:14px;cursor:pointer" onclick="try{const t=window.Telegram?.WebApp;t?.openTelegramLink?t.openTelegramLink('${botUrl}'):t?.openLink('${botUrl}');}catch(e){}closeModal()">⭐ Оплатить ${stars} ★ в боте</button>
+        
 
-        <p style="font-size:13px;font-weight:700;margin:14px 0 6px">💳 Способ 2: Тинькофф (перевод на карту)</p>
+        <p style="font-size:12px;color:#a1a1aa;text-align:center;margin:0 0 12px;line-height:1.4">👇 Нажми на удобный способ. После оплаты вернись сюда ↓</p>
+
+        <a id="payTbankBtn" href="https://www.tbank.ru/rm/r_TGugYbYVEb.mLmrPUwlTy/aHI4Y75190" target="_blank" rel="noopener" onclick="try{var __tg=window.Telegram&&window.Telegram.WebApp;if(__tg&&__tg.openLink){__tg.openLink(this.href);return false;}}catch(_e){}return true;" class="btn-cta" style="display:flex;align-items:center;justify-content:space-between;background:linear-gradient(135deg,#FFDD2D,#FFB800);color:#0B0B0F;font-weight:700;padding:14px 16px;border-radius:12px;text-decoration:none;margin-bottom:8px"><span style="font-size:22px">💳</span><span style="flex:1;text-align:left;margin-left:12px">Т-Банк · ${amount} ₽</span><span style="font-size:18px">→</span></a>
+
+        <a id="payStarsBtn" href="https://t.me/Ibaraholka_bot?start=pay_${createdId}_${tier}" target="_blank" rel="noopener" onclick="try{var __sg=window.Telegram&&window.Telegram.WebApp;if(__sg&&__sg.openTelegramLink){__sg.openTelegramLink(this.href);return false;}}catch(_e){}return true;" class="btn-cta" style="display:flex;align-items:center;justify-content:space-between;background:linear-gradient(135deg,#FFD75E,#FFB800);color:#0B0B0F;font-weight:700;padding:14px 16px;border-radius:12px;text-decoration:none;margin-bottom:8px"><span style="font-size:22px">⭐</span><span style="flex:1;text-align:left;margin-left:12px">Звёзды Telegram · ${stars} ★</span><span style="font-size:18px">→</span></a>
+
+        <button id="payTonBtn" type="button" class="btn-cta" style="display:flex;align-items:center;justify-content:space-between;background:linear-gradient(135deg,#0098EA,#0078C8);color:#fff;font-weight:700;padding:14px 16px;border-radius:12px;border:0;margin-bottom:10px;font-size:14px;box-shadow:0 4px 16px rgba(0,152,234,.4);cursor:pointer;width:100%"><span style="font-size:22px">💎</span><span style="flex:1;text-align:left;margin-left:12px">TON · ${tier==='vip'?'0.75':'0.25'} TON</span><span style="font-size:18px">📋</span></button>
+
+        <p style="font-size:13px;font-weight:700;margin:14px 0 6px">📋 Или переведи вручную:</p>
         <div style="background:#18181b;border:1px solid #FFDD2D;border-radius:10px;padding:10px;font-family:monospace;font-size:15px;color:#FFDD2D;text-align:center;margin-bottom:6px">${card}</div>
         <button class="btn-cta" style="width:100%;background:#26262E;color:#FFDD2D;font-weight:600;padding:10px;border-radius:10px;border:1px solid #FFDD2D;font-size:12px;cursor:pointer" onclick="try{navigator.clipboard.writeText('${card}').then(()=>toast('✅ Карта скопирована')).catch(()=>toast('Скопируй вручную: '+'${card}'));}catch(e){}">📋 Скопировать номер карты</button>
-        <p style="font-size:11px;color:#71717a;margin:6px 0 0;line-height:1.4">В комментарии к переводу укажи: <b>${comment}</b><br>Сумма: <b>${amount} ₽</b></p>
+        <p style="font-size:11px;color:#71717a;margin:6px 0 0;line-height:1.4;text-align:center">Сумма: <b>${amount} ₽</b><br>Комментарий: <b>${comment}</b></p>
 
-        <p style="font-size:13px;font-weight:700;margin:14px 0 6px">💎 Способ 3: TON</p>
-        <div style="background:#18181b;border:1px solid #0098EA;border-radius:10px;padding:10px;font-family:monospace;font-size:11px;color:#0098EA;text-align:center;word-break:break-all;margin-bottom:6px">${tonWallet}</div>
-        <button class="btn-cta" style="width:100%;background:#26262E;color:#0098EA;font-weight:600;padding:10px;border-radius:10px;border:1px solid #0098EA;font-size:12px;cursor:pointer" onclick="try{navigator.clipboard.writeText('${tonWallet}').then(()=>toast('✅ Кошелёк скопирован')).catch(()=>toast('Скопируй вручную'));}catch(e){}">📋 Скопировать кошелёк TON</button>
-        <p style="font-size:11px;color:#71717a;margin:6px 0 0;line-height:1.4">Сумма: <b>${tonAmt} TON</b><br>Комментарий: <b>${comment}</b></p>
-
-        <div style="margin-top:14px;background:rgba(34,197,94,.1);border:1px solid #22C55E;border-radius:10px;padding:10px;font-size:12px;color:#86efac;line-height:1.5;text-align:center">✅ Тариф активируется <b>автоматически</b> после оплаты.<br>Если не активировался за 5 мин — напиши <b>@Ibaraholka_bot</b></div>
+        <div style="margin-top:14px;background:rgba(34,197,94,.1);border:1px solid #22C55E;border-radius:10px;padding:10px;font-size:12px;color:#86efac;line-height:1.5;text-align:center">✅ После оплаты вернись сюда и нажми <b>«Я оплатил»</b>:<br><button id="confirmPaidBtn" class="btn-cta" style="width:100%;background:linear-gradient(135deg,#22C55E,#16A34A);color:#fff;font-weight:700;padding:12px;border-radius:10px;border:0;font-size:13px;cursor:pointer;margin-top:8px">✅ Я оплатил — активировать ${stars}★</button></div>
         <button class="btn-cta" style="width:100%;background:transparent;color:#a1a1aa;margin-top:10px;border:0;cursor:pointer;font-size:13px" onclick="closeModal()">Оплачу позже</button>
       </div></div>`;
       document.body.insertAdjacentHTML('beforeend',html);
+    // Заполняем href у Т-Банк кнопки из последнего yukassa response
+    if(window.__lastYukassaUrl){
+      const tBtn=document.getElementById('payTbankBtn');
+      if(tBtn){tBtn.href=window.__lastYukassaUrl;tBtn.setAttribute('target','_blank');tBtn.setAttribute('rel','noopener');tBtn.onclick=function(e){e.preventDefault();window.location.href=window.__lastYukassaUrl;return false;};}
+    }
+    // Назначаем обработчик "✅ Я оплатил"
+    const cBtn=document.getElementById('confirmPaidBtn');
+    if(cBtn){
+      cBtn.onclick=async()=>{
+        cBtn.disabled=true;cBtn.textContent='⏳ Проверяю оплату…';
+        try{
+          const nData=await fetch((window.API_BASE||'')+'/payments/tinkoff/notify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({listing_id:createdId,user_id:window.tg?.initDataUnsafe?.user?.id,tier:tier})}).then(r=>r.json()).catch(e=>({ok:false,error:String(e)}));
+          console.log('[pay] notify response',nData);
+          if(nData.ok){
+            cBtn.textContent='🎉 Активировать объявление!';
+            cBtn.style.background='linear-gradient(135deg,#FFB800,#FF8C00)';
+            cBtn.onclick=async()=>{
+              cBtn.disabled=true;cBtn.textContent='⏳ Публикую…';
+              try{
+                const aData=await fetch((window.API_BASE||'')+'/payments/activate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({listing_id:createdId,user_id:window.tg?.initDataUnsafe?.user?.id})}).then(r=>r.json()).catch(e=>({ok:false,error:String(e)}));
+                console.log('[pay] activate response',aData);
+                if(aData.ok){
+                  toast('🎉 Опубликовано в канале @ibaraholkatyt!');
+                  haptic('success');
+                  closeModal();
+                  await loadListings();
+                }else{
+                  cBtn.disabled=false;cBtn.textContent='🎉 Активировать объявление!';
+                  toast('❌ '+((aData.error||aData.detail||'Не удалось активировать').slice(0,100)));
+                }
+              }catch(e){cBtn.disabled=false;cBtn.textContent='🎉 Активировать объявление!';toast('❌ Ошибка сети');}
+            };
+          }else{
+            cBtn.disabled=false;cBtn.textContent='✅ Я оплатил — активировать '+stars+'★';
+            toast('⚠️ Оплата ещё не получена. Подожди 1 мин и попробуй ещё раз.');
+          }
+        }catch(e){cBtn.disabled=false;cBtn.textContent='✅ Я оплатил — активировать '+stars+'★';toast('❌ Ошибка сети');}
+      };
+    }
+    // Сохраняем URL в fallback на случай если кнопку нажмут
+    window.__lastYukassaUrl=payUrl||'';
     }
   };
 }
@@ -1042,7 +1096,10 @@ async function openRefs(){
 document.getElementById('q').addEventListener('input',e=>{searchQ=e.target.value;render();});
 
 document.querySelectorAll('.filter').forEach(el=>el.addEventListener('click',()=>{
-  activeCat=el.dataset.k;buildFilters();render();
+  activeCat=el.dataset.k;buildFilters();
+const _fetchTimeout=60000;
+function _toPR(p,t){return Promise.race([p,new Promise((_,r)=>setTimeout(()=>r(new Error('network-timeout')),t||_fetchTimeout))]);}
+render();
 }));
 
 document.querySelectorAll('.nav-i').forEach(el=>el.addEventListener('click',()=>{
@@ -1058,7 +1115,10 @@ document.querySelectorAll('.nav-i').forEach(el=>el.addEventListener('click',()=>
 
 function buildFilters(){
   $('filters').innerHTML=CATS.map(c=>`<div class="filter ${activeCat===c.k?'active':''}" data-k="${c.k}">${c.e} ${c.l}</div>`).join('');
-  document.querySelectorAll('.filter').forEach(el=>el.addEventListener('click',()=>{activeCat=el.dataset.k;buildFilters();render();}));
+  document.querySelectorAll('.filter').forEach(el=>el.addEventListener('click',()=>{activeCat=el.dataset.k;buildFilters();
+const _fetchTimeout=60000;
+function _toPR(p,t){return Promise.race([p,new Promise((_,r)=>setTimeout(()=>r(new Error('network-timeout')),t||_fetchTimeout))]);}
+render();}));
   // Подсветить активную статистику
   document.querySelectorAll('.stat').forEach(el=>{
     el.classList.toggle('active',el.dataset.mode===statMode);
@@ -1067,6 +1127,9 @@ function buildFilters(){
 }
 
 buildFilters();
+const _fetchTimeout=60000;
+function _toPR(p,t){return Promise.race([p,new Promise((_,r)=>setTimeout(()=>r(new Error('network-timeout')),t||_fetchTimeout))]);}
+
 const tg=window.Telegram?.WebApp;
 if(tg){tg.ready();tg.expand();}
 else{
@@ -1077,6 +1140,13 @@ else{
   document.body.prepend(c);
 }
 load();
+
+
+// v59: keep-alive ping every 14 min so Render free instance doesn't sleep
+function ibaraholkaWarmup(){try{fetch(API+'/health',{method:'GET',cache:'no-store'}).catch(()=>{});}catch(e){}}
+if(window.ibaraholkaWarmupTimer)clearInterval(window.ibaraholkaWarmupTimer);
+window.ibaraholkaWarmupTimer=setInterval(ibaraholkaWarmup,14*60*1000);
+setTimeout(ibaraholkaWarmup,30000);
 </script>
 </body>
 </html>
