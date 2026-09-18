@@ -6074,4 +6074,4 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789698345 Саша сделал Manual Deploy но Render скачал СТАРУЮ версию
+# deploy-trigger 1789713500 final fix: combined executescript with BIGINT schema + safe_execute for ALTERs
