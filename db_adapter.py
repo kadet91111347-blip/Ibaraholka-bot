@@ -113,6 +113,7 @@ try:
                         minconn=1,
                         maxconn=10,
                         dsn=DATABASE_URL,
+                        cursor_factory=psycopg2.extras.RealDictCursor,
                     )
                 return _pool_obj
 

@@ -6074,4 +6074,4 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789715000 psycopg2 restore + unified cursor
+# deploy-trigger 1789715500 add RealDictCursor
