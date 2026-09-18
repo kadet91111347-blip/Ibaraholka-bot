@@ -190,7 +190,24 @@ function showOpenViaBotModal(){
     '</div></div>';
   document.body.insertAdjacentHTML('beforeend',html);
 }
-const _tg=window.Telegram?.WebApp;window.tg=_tg;const auth=()=>{return _tg?.initData?{Authorization:'tma '+_tg.initData}:{};};
+const _tg=window.Telegram?.WebApp;window.tg=_tg;
+const auth=()=>{return _tg?.initData?{Authorization:'tma '+_tg.initData}:{};};
+let _authReady=null;
+const waitAuth=()=>{
+  if(_authReady)return _authReady;
+  _authReady=new Promise((resolve)=>{
+    if(_tg?.initData?.length>10){resolve(true);return;}
+    if(!_tg){resolve(false);return;}
+    let n=0;
+    const tick=()=>{
+      if(_tg.initData?.length>10){resolve(true);return;}
+      if(++n>30){resolve(false);return;}
+      setTimeout(tick,100);
+    };
+    tick();
+  });
+  return _authReady;
+};
 const me=()=>{const tg=window.Telegram?.WebApp;return tg?.initDataUnsafe?.user||null;};
 const openLink=(u)=>{const tg=window.Telegram?.WebApp;if(tg?.openLink){tg.openLink(u);}else{window.open(u,'_blank');}};
 const closeModal=()=>{document.querySelectorAll('.mbg').forEach(m=>m.remove());};
