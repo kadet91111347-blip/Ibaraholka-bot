@@ -131,6 +131,12 @@ def get_db_connection():
         try:
             yield _Pg8000DictConn(conn)
         finally:
+            # ALWAYS reset any aborted/pending transaction before returning to pool —
+            # otherwise the next request inherits a '25P02 current transaction is aborted' state.
+            try:
+                conn.rollback()
+            except Exception:
+                pass
             with _PG_POOL["lock"]:
                 _PG_POOL["free"].append(conn)
                 _PG_POOL["used"].discard(id(conn))
