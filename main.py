@@ -1732,12 +1732,13 @@ def debug_state():
         state["db_error"] = str(e)
     # Schema check
     try:
-        with db_cursor() as conn:
-            # PRAGMA works only in SQLite. For Postgres we use information_schema.
-            try:
+        # Use fresh connections to avoid cross-query 25P02 state
+        try:
+            with db_cursor() as conn:
                 cols = conn.execute("PRAGMA table_info(listings)").fetchall()
                 state["listings_columns"] = [r[1] for r in cols]
-            except Exception:
+        except Exception:
+            with db_cursor() as conn:
                 cols = conn.execute(
                     "SELECT column_name FROM information_schema.columns WHERE table_name='listings'"
                 ).fetchall()
@@ -1749,7 +1750,7 @@ def debug_state():
                     except Exception:
                         col_names.append(c[0])
                 state["listings_columns"] = col_names
-            state["has_channel_message_id"] = "channel_message_id" in state["listings_columns"]
+        state["has_channel_message_id"] = "channel_message_id" in (state["listings_columns"] or [])
     except Exception as e:
         state["schema_error"] = str(e)
     return state
