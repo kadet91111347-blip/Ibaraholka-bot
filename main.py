@@ -26,6 +26,7 @@ from typing import Optional, Dict, Any, List
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Header, Request, Query, Depends
+from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -1661,7 +1662,6 @@ async def mini_app():
 
 @app.get("/mini/{filename}")
 async def mini_static(filename: str):
-    """Отдаёт статику Mini App (картинки и т.д.)"""
     from fastapi.responses import HTMLResponse, FileResponse
     p = MINIAPP_DIR / filename
     if not p.exists() or not p.is_file():
