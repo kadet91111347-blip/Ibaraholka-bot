@@ -141,7 +141,273 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_cat ON listings(cat);
         CREATE INDEX IF NOT EXISTS idx_user ON listings(user_id);
         CREATE INDEX IF NOT EXISTS idx_created ON listings(created);
+
+        -- ===== SELF-LEARNING BOT TABLES =====
+        CREATE TABLE IF NOT EXISTS conversations (
+            id BIGINT PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            username TEXT DEFAULT '',
+            user_message TEXT NOT NULL,
+            bot_response TEXT NOT NULL,
+            intent TEXT NOT NULL,
+            response_variant INTEGER DEFAULT 0,
+            created BIGINT NOT NULL,
+            feedback TEXT DEFAULT NULL,
+            rating INTEGER DEFAULT NULL,
+            led_to_sale INTEGER DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_conv_user ON conversations(user_id);
+        CREATE INDEX IF NOT EXISTS idx_conv_intent ON conversations(intent);
+        CREATE INDEX IF NOT EXISTS idx_conv_created ON conversations(created);
+        CREATE TABLE IF NOT EXISTS ai_responses (
+            id BIGINT PRIMARY KEY,
+            intent TEXT NOT NULL,
+            user_pattern TEXT NOT NULL,
+            ai_response TEXT NOT NULL,
+            confidence REAL DEFAULT 0.5,
+            uses INTEGER DEFAULT 0,
+            success_rate REAL DEFAULT 0.0,
+            created BIGINT NOT NULL,
+            updated BIGINT NOT NULL,
+            UNIQUE(intent, user_pattern)
+        );
+        CREATE INDEX IF NOT EXISTS idx_ai_intent ON ai_responses(intent);
+        CREATE TABLE IF NOT EXISTS variant_stats (
+            id BIGINT PRIMARY KEY,
+            intent TEXT NOT NULL,
+            variant_idx INTEGER NOT NULL,
+            uses INTEGER DEFAULT 0,
+            positive INTEGER DEFAULT 0,
+            negative INTEGER DEFAULT 0,
+            last_updated BIGINT NOT NULL,
+            UNIQUE(intent, variant_idx)
+        );
+        CREATE TABLE IF NOT EXISTS learned_patterns (
+            id BIGINT PRIMARY KEY,
+            pattern TEXT NOT NULL UNIQUE,
+            intent TEXT NOT NULL,
+            confidence REAL DEFAULT 0.5,
+            created BIGINT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS user_profiles (
+            user_id BIGINT PRIMARY KEY,
+            username TEXT DEFAULT '',
+            first_name TEXT DEFAULT '',
+            preferred_intent TEXT DEFAULT '',
+            last_messages TEXT DEFAULT '',
+            messages_count INTEGER DEFAULT 0,
+            last_active BIGINT NOT NULL,
+            is_lead INTEGER DEFAULT 0,
+            notes TEXT DEFAULT ''
+        );
+
+        -- ===== ADS / IB COINS =====
+        CREATE TABLE IF NOT EXISTS ad_creatives (
+            id BIGINT PRIMARY KEY,
+            title TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            image_url TEXT DEFAULT '',
+            click_url TEXT DEFAULT '',
+            reward_coins INTEGER NOT NULL DEFAULT 10,
+            duration_sec INTEGER NOT NULL DEFAULT 10,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            weight INTEGER NOT NULL DEFAULT 1,
+            created BIGINT NOT NULL,
+            shown_count INTEGER DEFAULT 0,
+            click_count INTEGER DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS ad_views (
+            id BIGINT PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            ad_id BIGINT NOT NULL,
+            coins_credited INTEGER NOT NULL,
+            ip TEXT DEFAULT '',
+            created BIGINT NOT NULL,
+            completed INTEGER DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_views_user ON ad_views(user_id);
+        CREATE INDEX IF NOT EXISTS idx_views_ad ON ad_views(ad_id);
+        CREATE INDEX IF NOT EXISTS idx_views_created ON ad_views(created);
+        CREATE TABLE IF NOT EXISTS user_balances (
+            user_id BIGINT PRIMARY KEY,
+            coins INTEGER NOT NULL DEFAULT 0,
+            total_earned INTEGER NOT NULL DEFAULT 0,
+            total_spent INTEGER NOT NULL DEFAULT 0,
+            updated BIGINT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_balance_coins ON user_balances(coins);
+
+        -- ===== ESCROW / DEALS =====
+        CREATE TABLE IF NOT EXISTS deals (
+            id TEXT PRIMARY KEY,
+            listing_id TEXT NOT NULL,
+            buyer_id BIGINT NOT NULL,
+            buyer_name TEXT,
+            buyer_username TEXT,
+            seller_id BIGINT NOT NULL,
+            seller_name TEXT,
+            seller_username TEXT,
+            amount_rub BIGINT NOT NULL,
+            amount_nano BIGINT,
+            currency TEXT NOT NULL,
+            payment_method TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'awaiting_payment',
+            shipping_address TEXT,
+            shipping_city TEXT,
+            tracking TEXT,
+            dispute_reason TEXT,
+            dispute_resolution TEXT,
+            escrow_tx_hash TEXT,
+            payout_tx_hash TEXT,
+            created BIGINT NOT NULL,
+            paid_at BIGINT,
+            shipped_at BIGINT,
+            confirmed_at BIGINT,
+            closed_at BIGINT,
+            auto_release_at BIGINT
+        );
+        CREATE INDEX IF NOT EXISTS idx_deals_buyer ON deals(buyer_id);
+        CREATE INDEX IF NOT EXISTS idx_deals_seller ON deals(seller_id);
+        CREATE INDEX IF NOT EXISTS idx_deals_status ON deals(status);
+        CREATE INDEX IF NOT EXISTS idx_deals_listing ON deals(listing_id);
+        CREATE TABLE IF NOT EXISTS deal_messages (
+            id BIGSERIAL PRIMARY KEY,
+            deal_id TEXT NOT NULL,
+            from_user_id BIGINT NOT NULL,
+            text TEXT,
+            photo_url TEXT,
+            created BIGINT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_deal_messages_deal ON deal_messages(deal_id);
+        CREATE TABLE IF NOT EXISTS seller_balances (
+            user_id BIGINT NOT NULL,
+            currency TEXT NOT NULL,
+            amount BIGINT NOT NULL DEFAULT 0,
+            updated BIGINT NOT NULL,
+            PRIMARY KEY (user_id, currency)
+        );
+        CREATE TABLE IF NOT EXISTS payouts (
+            id TEXT PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            currency TEXT NOT NULL,
+            amount BIGINT NOT NULL,
+            destination TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            tx_hash TEXT,
+            created BIGINT NOT NULL,
+            completed BIGINT,
+            note TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_payouts_user ON payouts(user_id);
+        CREATE INDEX IF NOT EXISTS idx_payouts_status ON payouts(status);
+
+        -- ===== MATCH SUBSCRIPTIONS =====
+        CREATE TABLE IF NOT EXISTS match_subscriptions (
+            id TEXT PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            user_name TEXT,
+            user_username TEXT,
+            query TEXT NOT NULL,
+            keywords TEXT NOT NULL,
+            cat TEXT,
+            max_price_rub BIGINT,
+            city TEXT,
+            color TEXT,
+            extra TEXT,
+            active INTEGER NOT NULL DEFAULT 1,
+            is_free INTEGER NOT NULL DEFAULT 0,
+            paid_until BIGINT,
+            created BIGINT NOT NULL,
+            last_notified BIGINT
+        );
+        CREATE INDEX IF NOT EXISTS idx_match_user ON match_subscriptions(user_id);
+        CREATE INDEX IF NOT EXISTS idx_match_active ON match_subscriptions(active);
+        CREATE INDEX IF NOT EXISTS idx_match_cat ON match_subscriptions(cat);
+        CREATE INDEX IF NOT EXISTS idx_match_city ON match_subscriptions(city);
+        CREATE TABLE IF NOT EXISTS match_log (
+            id BIGSERIAL PRIMARY KEY,
+            subscription_id TEXT NOT NULL,
+            listing_id TEXT NOT NULL,
+            sent_at BIGINT NOT NULL,
+            delivered INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE INDEX IF NOT EXISTS idx_match_log_sub ON match_log(subscription_id);
+        CREATE INDEX IF NOT EXISTS idx_match_log_listing ON match_log(listing_id);
+
+        -- ===== REFERRALS =====
+        CREATE TABLE IF NOT EXISTS referrals (
+            id BIGSERIAL PRIMARY KEY,
+            referrer_id BIGINT NOT NULL,
+            referred_id BIGINT NOT NULL UNIQUE,
+            referred_username TEXT,
+            referred_first_name TEXT,
+            created BIGINT NOT NULL,
+            bonus_granted INTEGER DEFAULT 0,
+            bonus_type TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_referrals_referrer ON referrals(referrer_id);
+        CREATE INDEX IF NOT EXISTS idx_referrals_created ON referrals(created);
+        CREATE TABLE IF NOT EXISTS referral_bonuses (
+            id BIGSERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            milestone INTEGER NOT NULL,
+            bonus_type TEXT NOT NULL,
+            bonus_value TEXT NOT NULL,
+            created BIGINT NOT NULL,
+            UNIQUE(user_id, milestone)
+        );
+        CREATE INDEX IF NOT EXISTS idx_referral_bonuses_user ON referral_bonuses(user_id);
+
+        -- ===== FAVORITES =====
+        CREATE TABLE IF NOT EXISTS favorites (
+            id BIGSERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            listing_id TEXT NOT NULL,
+            created BIGINT NOT NULL,
+            UNIQUE(user_id, listing_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_favorites_user ON favorites(user_id);
+        CREATE INDEX IF NOT EXISTS idx_favorites_created ON favorites(created DESC);
+
+        -- ===== REVIEWS =====
+        CREATE TABLE IF NOT EXISTS reviews (
+            id BIGSERIAL PRIMARY KEY,
+            deal_id TEXT,
+            seller_id BIGINT NOT NULL,
+            buyer_id BIGINT NOT NULL,
+            rating INTEGER NOT NULL,
+            text TEXT,
+            created BIGINT NOT NULL,
+            UNIQUE(deal_id, buyer_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_reviews_seller ON reviews(seller_id, created DESC);
+        CREATE INDEX IF NOT EXISTS idx_reviews_buyer ON reviews(buyer_id);
+
+        -- ===== LISTING VIEWS =====
+        CREATE TABLE IF NOT EXISTS listing_views (
+            id BIGSERIAL PRIMARY KEY,
+            listing_id TEXT NOT NULL,
+            viewer_id BIGINT,
+            created BIGINT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_listing_views_listing ON listing_views(listing_id, created DESC);
+        CREATE INDEX IF NOT EXISTS idx_listing_views_recent ON listing_views(created DESC);
+
+        -- ===== SAVED FILTERS =====
+        CREATE TABLE IF NOT EXISTS saved_filters (
+            id BIGSERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            name TEXT NOT NULL,
+            cat TEXT,
+            city TEXT,
+            max_price INTEGER,
+            query TEXT,
+            created BIGINT NOT NULL,
+            UNIQUE(user_id, name)
+        );
+        CREATE INDEX IF NOT EXISTS idx_saved_filters_user ON saved_filters(user_id);
         """)
+
     # Schema upgrades — each on its own one-shot connection.
     upgrade_alters = [
         "ALTER TABLE listings ADD COLUMN IF NOT EXISTS paid_at BIGINT DEFAULT NULL",
@@ -157,322 +423,6 @@ def init_db():
                 'user_profiles', 'learned_patterns'):
         for col in ('user_id', 'created'):
             safe_execute(f"ALTER TABLE {tbl} ALTER COLUMN {col} TYPE BIGINT")
-
-        # ===== SELF-LEARNING BOT TABLES =====
-        conn.executescript("""
-        -- История диалогов
-        CREATE TABLE IF NOT EXISTS conversations (
-            id BIGINT PRIMARY KEY,
-            user_id INTEGER NOT NULL,
-            username TEXT DEFAULT '',
-            user_message TEXT NOT NULL,
-            bot_response TEXT NOT NULL,
-            intent TEXT NOT NULL,
-            response_variant INTEGER DEFAULT 0,
-            created INTEGER NOT NULL,
-            feedback TEXT DEFAULT NULL,
-            rating INTEGER DEFAULT NULL,
-            led_to_sale INTEGER DEFAULT 0
-        );
-        CREATE INDEX IF NOT EXISTS idx_conv_user ON conversations(user_id);
-        CREATE INDEX IF NOT EXISTS idx_conv_intent ON conversations(intent);
-        CREATE INDEX IF NOT EXISTS idx_conv_created ON conversations(created);
-
-        -- Сгенерированные AI ответы (после обучения)
-        CREATE TABLE IF NOT EXISTS ai_responses (
-            id BIGINT PRIMARY KEY,
-            intent TEXT NOT NULL,
-            user_pattern TEXT NOT NULL,
-            ai_response TEXT NOT NULL,
-            confidence REAL DEFAULT 0.5,
-            uses INTEGER DEFAULT 0,
-            success_rate REAL DEFAULT 0.0,
-            created INTEGER NOT NULL,
-            updated INTEGER NOT NULL,
-            UNIQUE(intent, user_pattern)
-        );
-        CREATE INDEX IF NOT EXISTS idx_ai_intent ON ai_responses(intent);
-
-        -- Обучение: какие варианты работают лучше
-        CREATE TABLE IF NOT EXISTS variant_stats (
-            id BIGINT PRIMARY KEY,
-            intent TEXT NOT NULL,
-            variant_idx INTEGER NOT NULL,
-            uses INTEGER DEFAULT 0,
-            positive INTEGER DEFAULT 0,
-            negative INTEGER DEFAULT 0,
-            last_updated INTEGER NOT NULL,
-            UNIQUE(intent, variant_idx)
-        );
-
-        -- Паттерны обучения (что бот уже понял)
-        CREATE TABLE IF NOT EXISTS learned_patterns (
-            id BIGINT PRIMARY KEY,
-            pattern TEXT NOT NULL UNIQUE,
-            intent TEXT NOT NULL,
-            confidence REAL DEFAULT 0.5,
-            created INTEGER NOT NULL
-        );
-
-        -- Профиль клиента (что он предпочитает)
-        CREATE TABLE IF NOT EXISTS user_profiles (
-            user_id INTEGER PRIMARY KEY,
-            username TEXT DEFAULT '',
-            first_name TEXT DEFAULT '',
-            preferred_intent TEXT DEFAULT '',
-            last_messages TEXT DEFAULT '',
-            messages_count INTEGER DEFAULT 0,
-            last_active INTEGER NOT NULL,
-            is_lead INTEGER DEFAULT 0,
-            notes TEXT DEFAULT ''
-        );
-
-        -- ===== ADS / IB COINS =====
-        -- Рекламные креативы (что показывать юзеру за IB Coins)
-        CREATE TABLE IF NOT EXISTS ad_creatives (
-            id BIGINT PRIMARY KEY,
-            title TEXT NOT NULL,
-            description TEXT DEFAULT '',
-            image_url TEXT DEFAULT '',
-            click_url TEXT DEFAULT '',
-            reward_coins INTEGER NOT NULL DEFAULT 10,
-            duration_sec INTEGER NOT NULL DEFAULT 10,
-            enabled INTEGER NOT NULL DEFAULT 1,
-            weight INTEGER NOT NULL DEFAULT 1,
-            created INTEGER NOT NULL,
-            shown_count INTEGER DEFAULT 0,
-            click_count INTEGER DEFAULT 0
-        );
-
-        -- Просмотры рекламы (антифрод: 1 просмотр = +N монет, не чаще 1 раза в 30с на юзера)
-        CREATE TABLE IF NOT EXISTS ad_views (
-            id BIGINT PRIMARY KEY,
-            user_id BIGINT NOT NULL,
-            ad_id BIGINT NOT NULL,
-            coins_credited INTEGER NOT NULL,
-            ip TEXT DEFAULT '',
-            created INTEGER NOT NULL,
-            completed INTEGER DEFAULT 0
-        );
-        CREATE INDEX IF NOT EXISTS idx_views_user ON ad_views(user_id);
-        CREATE INDEX IF NOT EXISTS idx_views_ad ON ad_views(ad_id);
-        CREATE INDEX IF NOT EXISTS idx_views_created ON ad_views(created);
-
-        -- Баланс внутренней валюты (IB Coins): 1 IB Coin = 1 Telegram Star
-        CREATE TABLE IF NOT EXISTS user_balances (
-            user_id BIGINT PRIMARY KEY,
-            coins INTEGER NOT NULL DEFAULT 0,
-            total_earned INTEGER NOT NULL DEFAULT 0,
-            total_spent INTEGER NOT NULL DEFAULT 0,
-            updated INTEGER NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_balance_coins ON user_balances(coins);
-
-        -- ===== ESCROW / DEALS / ВЫВОД СРЕДСТВ =====
-        -- Сделка между покупателем и продавцом, деньги в гаранте до подтверждения получения.
-        CREATE TABLE IF NOT EXISTS deals (
-            id TEXT PRIMARY KEY,
-            listing_id TEXT NOT NULL,
-            buyer_id BIGINT NOT NULL,
-            buyer_name TEXT,
-            buyer_username TEXT,
-            seller_id BIGINT NOT NULL,
-            seller_name TEXT,
-            seller_username TEXT,
-            amount_rub BIGINT NOT NULL,           -- цена сделки в рублях
-            amount_nano BIGINT,                    -- цена в TON (если оплата TON), иначе NULL
-            currency TEXT NOT NULL,                -- 'RUB' | 'TON'
-            payment_method TEXT NOT NULL,          -- 'tinkoff' | 'yukassa' | 'ton'
-            status TEXT NOT NULL DEFAULT 'awaiting_payment',
-                -- awaiting_payment → escrowed → shipped → released
-                --                  ↘ disputed → refunded / released (admin)
-                --                  ↘ cancelled (до оплаты)
-            shipping_address TEXT,
-            shipping_city TEXT,
-            tracking TEXT,
-            dispute_reason TEXT,
-            dispute_resolution TEXT,
-            escrow_tx_hash TEXT,                   -- tx хеш входящего TON платежа или label Тинькофф
-            payout_tx_hash TEXT,                   -- tx хеш исходящего TON продавцу при release
-            created INTEGER NOT NULL,
-            paid_at INTEGER,
-            shipped_at INTEGER,
-            confirmed_at INTEGER,
-            closed_at INTEGER,
-            auto_release_at INTEGER                 -- когда автоподтверждение (shipped + 5 дней)
-        );
-        CREATE INDEX IF NOT EXISTS idx_deals_buyer ON deals(buyer_id);
-        CREATE INDEX IF NOT EXISTS idx_deals_seller ON deals(seller_id);
-        CREATE INDEX IF NOT EXISTS idx_deals_status ON deals(status);
-        CREATE INDEX IF NOT EXISTS idx_deals_listing ON deals(listing_id);
-
-        -- Сообщения внутри сделки (чат покупатель ↔ продавец)
-        CREATE TABLE IF NOT EXISTS deal_messages (
-            id BIGSERIAL PRIMARY KEY,
-            deal_id TEXT NOT NULL,
-            from_user_id BIGINT NOT NULL,
-            text TEXT,
-            photo_url TEXT,
-            created INTEGER NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_deal_messages_deal ON deal_messages(deal_id);
-
-        -- Балансы продавцов для вывода (₽ и TON отдельно)
-        CREATE TABLE IF NOT EXISTS seller_balances (
-            user_id BIGINT NOT NULL,
-            currency TEXT NOT NULL,                -- 'RUB' | 'TON'
-            amount BIGINT NOT NULL DEFAULT 0,      -- в копейках (RUB) или нанотонах (TON)
-            updated INTEGER NOT NULL,
-            PRIMARY KEY (user_id, currency)
-        );
-
-        -- Заявки на вывод средств продавцом
-        CREATE TABLE IF NOT EXISTS payouts (
-            id TEXT PRIMARY KEY,
-            user_id BIGINT NOT NULL,
-            currency TEXT NOT NULL,                -- 'RUB' | 'TON'
-            amount BIGINT NOT NULL,
-            destination TEXT NOT NULL,             -- карта/телефон для RUB или TON-адрес для TON
-            status TEXT NOT NULL DEFAULT 'pending',-- pending → completed | failed
-            tx_hash TEXT,
-            created INTEGER NOT NULL,
-            completed INTEGER,
-            note TEXT
-        );
-        CREATE INDEX IF NOT EXISTS idx_payouts_user ON payouts(user_id);
-        CREATE INDEX IF NOT EXISTS idx_payouts_status ON payouts(status);
-
-        -- ===== БОТ-ПОДБИРАТЕЛЬ / Match agent =====
-        -- Юзер подписывается на запрос типа "iPhone 13 до 30К в Москве" — бот пушит подходящие объявления
-        CREATE TABLE IF NOT EXISTS match_subscriptions (
-            id TEXT PRIMARY KEY,                  -- MS-XXXXXX
-            user_id BIGINT NOT NULL,
-            user_name TEXT,
-            user_username TEXT,
-            query TEXT NOT NULL,                  -- сырой запрос юзера: "iPhone 13 до 30К в Москве, чёрный"
-            keywords TEXT NOT NULL,               -- нормализованные ключевые слова для матчинга (через запятую)
-            cat TEXT,                             -- iphone / airpods / ipad / mac / watch / accs / NULL
-            max_price_rub BIGINT,                 -- NULL если не указано
-            city TEXT,                            -- NULL если любой
-            color TEXT,                           -- чёрный / белый / NULL
-            extra TEXT,                           -- любые доп. пожелания: "в идеале", "без царапин"
-            active INTEGER NOT NULL DEFAULT 1,    -- 1 = активна, 0 = отключена
-            is_free INTEGER NOT NULL DEFAULT 0,   -- 1 = бесплатная первая подписка
-            paid_until INTEGER,                   -- unix sec — когда заканчивается оплаченный период
-            created INTEGER NOT NULL,
-            last_notified INTEGER                 -- для rate-limit: не спамить чаще 1 раза в минуту
-        );
-        CREATE INDEX IF NOT EXISTS idx_match_user ON match_subscriptions(user_id);
-        CREATE INDEX IF NOT EXISTS idx_match_active ON match_subscriptions(active) WHERE active=1;
-        CREATE INDEX IF NOT EXISTS idx_match_cat ON match_subscriptions(cat);
-        CREATE INDEX IF NOT EXISTS idx_match_city ON match_subscriptions(city);
-
-        -- Лог отправленных матчей (чтобы не дублировать пуши)
-        CREATE TABLE IF NOT EXISTS match_log (
-            id BIGSERIAL PRIMARY KEY,
-            subscription_id TEXT NOT NULL,
-            listing_id TEXT NOT NULL,
-            sent_at INTEGER NOT NULL,
-            delivered INTEGER NOT NULL DEFAULT 1   -- 0 если бот не смог доставить (юзер заблокировал)
-        );
-        CREATE INDEX IF NOT EXISTS idx_match_log_sub ON match_log(subscription_id);
-        CREATE INDEX IF NOT EXISTS idx_match_log_listing ON match_log(listing_id);
-        """)
-
-        # ===== REFERRALS — Реф-лесенка =====
-        # Хранит кто кого привёл и какие бонусы начислены
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS referrals (
-                id BIGSERIAL PRIMARY KEY,
-                referrer_id BIGINT NOT NULL,
-                referred_id BIGINT NOT NULL UNIQUE,
-                referred_username TEXT,
-                referred_first_name TEXT,
-                created INTEGER NOT NULL,
-                bonus_granted INTEGER DEFAULT 0,
-                bonus_type TEXT
-            )
-        """)
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_referrals_referrer ON referrals(referrer_id)
-        """)
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_referrals_created ON referrals(created)
-        """)
-        # Бонусы за реф-лесенку: milestone → кол-во приглашённых → тип бонуса
-        # 1 = 5 coins, 3 = 10 coins, 5 = 1 день VIP, 15 = 3 дня VIP, 25 = 7 дней VIP
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS referral_bonuses (
-                id BIGSERIAL PRIMARY KEY,
-                user_id BIGINT NOT NULL,
-                milestone INTEGER NOT NULL,
-                bonus_type TEXT NOT NULL,
-                bonus_value TEXT NOT NULL,
-                created INTEGER NOT NULL,
-                UNIQUE(user_id, milestone)
-            )
-        """)
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_referral_bonuses_user ON referral_bonuses(user_id)
-        """)
-
-        # ===== ИЗБРАННОЕ / FAVORITES =====
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS favorites (
-                id BIGSERIAL PRIMARY KEY,
-                user_id BIGINT NOT NULL,
-                listing_id TEXT NOT NULL,
-                created INTEGER NOT NULL,
-                UNIQUE(user_id, listing_id)
-            )
-        """)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_favorites_user ON favorites(user_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_favorites_created ON favorites(created DESC)")
-
-        # ===== ОТЗЫВЫ НА ПРОДАВЦОВ / REVIEWS =====
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS reviews (
-                id BIGSERIAL PRIMARY KEY,
-                deal_id TEXT,
-                seller_id BIGINT NOT NULL,
-                buyer_id BIGINT NOT NULL,
-                rating INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5),
-                text TEXT,
-                created INTEGER NOT NULL,
-                UNIQUE(deal_id, buyer_id)
-            )
-        """)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_reviews_seller ON reviews(seller_id, created DESC)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_reviews_buyer ON reviews(buyer_id)")
-
-        # ===== ПРОСМОТРЫ ОБЪЯВЛЕНИЙ / LISTING VIEWS =====
-        # Для счётчика "X человек смотрят" + аналитики продавцу
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS listing_views (
-                id BIGSERIAL PRIMARY KEY,
-                listing_id TEXT NOT NULL,
-                viewer_id BIGINT,
-                created INTEGER NOT NULL
-            )
-        """)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_listing_views_listing ON listing_views(listing_id, created DESC)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_listing_views_recent ON listing_views(created DESC)")
-
-        # ===== СОХРАНЁННЫЕ ФИЛЬТРЫ / SAVED FILTERS =====
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS saved_filters (
-                id BIGSERIAL PRIMARY KEY,
-                user_id BIGINT NOT NULL,
-                name TEXT NOT NULL,
-                cat TEXT,
-                city TEXT,
-                max_price INTEGER,
-                query TEXT,
-                created INTEGER NOT NULL,
-                UNIQUE(user_id, name)
-            )
-        """)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_saved_filters_user ON saved_filters(user_id)")
 
 
 # ============================================================
