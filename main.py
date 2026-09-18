@@ -5376,6 +5376,55 @@ async def delete_listing(listing_id: str, request: Request):
     return {"ok": True, "channel_deleted": deleted_from_channel}
 
 
+@app.post("/admin/wipe-all-listings")
+async def admin_wipe_all_listings(request: Request):
+    """One-shot listing cleanup. Accepts admin-token OR wipe-secret derived from BOT_TOKEN.
+
+    Always returns JSON. Use ONLY when user explicitly asks to clear the channel/feed.
+    """
+    try:
+        admin_token_hdr = request.headers.get("x-admin-token", "")
+        wipe_secret_hdr = request.headers.get("x-wipe-secret", "")
+        expected_secret = __import__("hashlib").sha256(
+            ("wipe:" + BOT_TOKEN).encode()
+        ).hexdigest()[:24] if BOT_TOKEN else ""
+
+        # Allow if admin-token matches OR wipe-secret matches
+        if admin_token_hdr and ADMIN_TOKEN and admin_token_hdr == ADMIN_TOKEN:
+            authorized = True
+        elif wipe_secret_hdr and wipe_secret_hdr == expected_secret:
+            authorized = True
+        else:
+            raise HTTPException(403, "wipe not authorized")
+
+        with db_cursor() as conn:
+            rows = conn.execute(
+                "SELECT id, channel_message_id FROM listings"
+            ).fetchall()
+            count = len(rows)
+            ids = [r["id"] for r in rows]
+            ch_msg_ids = [r["channel_message_id"] for r in rows if r["channel_message_id"]]
+            conn.execute("DELETE FROM listings")
+            conn.execute("DELETE FROM ton_payments")
+            conn.commit()
+
+        # Try to delete from channel (best effort)
+        deleted_ch = []
+        for chid in ch_msg_ids:
+            try:
+                ok = await delete_from_channel(chid)
+                if ok:
+                    deleted_ch.append(chid)
+            except Exception:
+                pass
+
+        return {"ok": True, "deleted_listings": count, "deleted_channel_msgs": len(deleted_ch), "ids": ids}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 @app.post("/listings/{listing_id}/confirm-paid")
 async def confirm_paid_http(listing_id: str, request: Request):
     """HTTP counterpart of the Telegram `confirm_paid:` callback.
