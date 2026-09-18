@@ -45,21 +45,16 @@ from aiogram.types import LabeledPrice, InlineKeyboardMarkup, InlineKeyboardButt
 # ============================================================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 import re as _re_webapp
-_raw_webapp = os.getenv("WEBAPP_URL", "https://ibaraholka.p.spru.io/v6.html").strip()
-# Hardcoded correct value as ultimate fallback
-_correct_webapp = "https://ibaraholka.p.spru.io/v6.html"
-# Try env var first, apply fixes
+# Render hosts Mini App on /mini — same domain as API, no CORS, no CSP/X-Frame-Options.
+# spru.io/v6.html is dead (404) and has CSP frame-ancestors 'none' that breaks WebView.
+_render_default = "https://ibaraholka-bot.onrender.com/mini?v=v62"
+_raw_webapp = os.getenv("WEBAPP_URL", _render_default).strip()
 WEBAPP_URL = _raw_webapp
 if WEBAPP_URL and '://' not in WEBAPP_URL:
     WEBAPP_URL = 'https://' + WEBAPP_URL
-# Fix missing slash between domain and page (e.g. .iov6.html -> .io/v6.html)
-WEBAPP_URL = _re_webapp.sub(r'(spru\.io)([^/:])', r'\1/\2', WEBAPP_URL)
-# If still broken (no v6.html suffix and looks like a spru domain), force correct
-if 'spru.io' in WEBAPP_URL and not WEBAPP_URL.endswith('/v6.html') and not WEBAPP_URL.endswith('/'):
-    WEBAPP_URL = WEBAPP_URL.rstrip('/') + '/v6.html'
-# Sanity check: if WEBAPP_URL doesn't contain /v6.html at all, use hardcoded
-if 'spru.io' in WEBAPP_URL and '/v6.html' not in WEBAPP_URL:
-    WEBAPP_URL = _correct_webapp
+# Legacy: strip any spru.io /v6.html (dead URL) — fall back to Render /mini
+if 'spru.io' in WEBAPP_URL:
+    WEBAPP_URL = _render_default
 print(f'[startup] WEBAPP_URL={WEBAPP_URL}')
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@ibaraholkatyt").strip()
@@ -6060,4 +6055,4 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789734600 add RealDictCursor + HEAD methods for /mini
+# deploy-trigger 1789734700 add RealDictCursor + HEAD methods for /mini
