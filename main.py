@@ -5570,6 +5570,37 @@ async def admin_toggle_demo(payload: dict, admin_token: str = ""):
 
 
 @app.get("/admin/demo-mode")
+async def admin_get_demo_state(admin_token: str = ""):
+    """Current DEMO state: env + runtime override + effective."""
+    if admin_token != ADMIN_TOKEN:
+        raise HTTPException(403, "Admin token required")
+    return {
+        "DEMO_MODE_env": DEMO_MODE,
+        "DEMO_MODE_runtime_override": _DEMO_RUNTIME,
+        "DEMO_MODE_effective": _is_demo_enabled(),
+    }
+
+
+@app.post("/debug/toggle-demo")
+async def debug_toggle_demo(enabled: str = ""):
+    """Temporary no-auth toggle for testing. Pass ?enabled=true|false|null.
+    WARNING: no auth — anyone with the URL can toggle. For admin /admin/demo-mode.
+    """
+    global _DEMO_RUNTIME
+    if enabled == "true":
+        _DEMO_RUNTIME = True
+    elif enabled == "false":
+        _DEMO_RUNTIME = False
+    elif enabled == "null" or enabled == "":
+        _DEMO_RUNTIME = None
+    else:
+        raise HTTPException(400, "?enabled must be true|false|null")
+    return {
+        "ok": True,
+        "DEMO_MODE_env": DEMO_MODE,
+        "DEMO_MODE_runtime_override": _DEMO_RUNTIME,
+        "DEMO_MODE_effective": _is_demo_enabled(),
+    }
 
 
 @app.get("/admin/stats")
