@@ -6060,4 +6060,4 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789739372 fix: get_user handles tma demo in PROPER branch (before not authorization check)
+# deploy-trigger 1789740900 fix: get_user handles tma demo in PROPER branch (before not authorization check)
