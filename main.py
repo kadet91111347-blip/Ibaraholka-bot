@@ -2339,8 +2339,8 @@ async def tinkoff_notify(request: Request):
             }
         # Mark as paid (NOT active yet — user must explicitly activate)
         conn.execute(
-            "UPDATE listings SET status='paid', paid_at=extract(epoch from now())::bigint WHERE id=?",
-            (listing_id,),
+            "UPDATE listings SET status='paid', paid_at=? WHERE id=?",
+            (int(time.time()), listing_id),
         )
         conn.commit()
 
@@ -2492,8 +2492,8 @@ async def yukassa_webhook(request: Request):
             if row and row["status"] in ("awaiting_payment", "paid"):
                 if row["status"] != "paid":
                     conn.execute(
-                        "UPDATE listings SET status='paid', paid_at=extract(epoch from now())::bigint WHERE id=?",
-                        (listing_id,),
+                        "UPDATE listings SET status='paid', paid_at=? WHERE id=?",
+                        (int(time.time()), listing_id),
                     )
                     conn.commit()
                 item_dict = {
@@ -2706,8 +2706,8 @@ async def ton_verify_payment(request: Request):
             if row and row["status"] in ("awaiting_payment", "paid"):
                 if row["status"] != "paid":
                     conn.execute(
-                        "UPDATE listings SET status='paid', paid_at=extract(epoch from now())::bigint WHERE id=?",
-                        (listing_id,),
+                        "UPDATE listings SET status='paid', paid_at=? WHERE id=?",
+                        (int(time.time()), listing_id),
                     )
                     conn.commit()
                 item_dict = {
@@ -5091,7 +5091,7 @@ async def profile_me(user: Dict[str, Any] = Depends(get_user)):
         ).fetchall()]
         fav_count_rows = conn.execute("SELECT COUNT(*) AS n FROM favorites WHERE user_id = ?", (uid,)).fetchone()
         refs_rows = conn.execute("SELECT COUNT(*) AS n FROM referrals WHERE referrer_id = ?", (uid,)).fetchone()
-        rating_rows = conn.execute("SELECT AVG(rating)::float AS avg, COUNT(*) AS n FROM reviews WHERE seller_id = ?", (uid,)).fetchone()
+        rating_rows = conn.execute("SELECT CAST(AVG(rating) AS FLOAT) AS avg, COUNT(*) AS n FROM reviews WHERE seller_id = ?", (uid,)).fetchone()
         bal = conn.execute("SELECT coins, total_earned FROM user_balances WHERE user_id = ?", (uid,)).fetchone()
         up = conn.execute("SELECT vip_until FROM user_balances WHERE user_id = ?", (uid,)).fetchone()
 
@@ -5443,8 +5443,8 @@ async def confirm_paid_http(listing_id: str, request: Request):
             raise HTTPException(400, f"bad_status:{row['status']}")
         # Mark as paid; user must then call /payments/activate to publish.
         conn.execute(
-            "UPDATE listings SET status='paid', paid_at=extract(epoch from now())::bigint WHERE id=?",
-            (listing_id,),
+            "UPDATE listings SET status='paid', paid_at=? WHERE id=?",
+            (int(time.time()), listing_id),
         )
         conn.commit()
 
@@ -6148,4 +6148,4 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789745000 fix: get_user handles tma demo in PROPER branch (before not authorization check)
+# deploy-trigger 1789746000 fix: get_user handles tma demo in PROPER branch (before not authorization check)
