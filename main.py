@@ -6055,4 +6055,4 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789734700 add RealDictCursor + HEAD methods for /mini
+# deploy-trigger 1789738671 fix: auto-enable DEMO_MODE on Render (RENDER env var)
