@@ -403,6 +403,20 @@ def init_db():
             UNIQUE(user_id, name)
         );
         CREATE INDEX IF NOT EXISTS idx_saved_filters_user ON saved_filters(user_id);
+        CREATE TABLE IF NOT EXISTS ton_payments (
+            id BIGINT,
+            listing_id TEXT NOT NULL,
+            tier TEXT NOT NULL,
+            amount_nano BIGINT NOT NULL,
+            comment TEXT NOT NULL,
+            tx_hash TEXT,
+            confirmed INT DEFAULT 0,
+            tx_time BIGINT,
+            user_id BIGINT,
+            created BIGINT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_ton_payments_listing ON ton_payments(listing_id, created DESC);
+        CREATE INDEX IF NOT EXISTS idx_ton_payments_comment ON ton_payments(comment);
         """)
 
     # Schema upgrades — each on its own one-shot connection.
@@ -1750,7 +1764,7 @@ def debug_state():
         except Exception:
             with db_cursor() as conn:
                 cols = conn.execute(
-                    "SELECT column_name FROM information_schema.columns WHERE table_name='listings'"
+                    ("SELECT column_name FROM information_schema.columns WHERE table_name='listings'" if USE_POSTGRES else "PRAGMA table_info(listings)")
                 ).fetchall()
                 # PG returns tuples, sqlite returns Row objects; handle both
                 col_names = []
@@ -6066,4 +6080,4 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789742000 fix: get_user handles tma demo in PROPER branch (before not authorization check)
+# deploy-trigger 1789743000 fix: get_user handles tma demo in PROPER branch (before not authorization check)
