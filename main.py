@@ -62,8 +62,10 @@ CHANNEL_ID = os.getenv("CHANNEL_ID", "@ibaraholkatyt").strip()
 # In production set via ADMIN_TOKEN env var; fallback only for emergency local dev
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "").strip()
 # DEMO_MODE: 1 = accept requests without Telegram initData (for testing)
-#            0 = require real Telegram WebApp authorization (production)
-DEMO_MODE = os.getenv("DEMO_MODE", "0").strip() == "1"
+# On Render.com auto-enable (real Telegram initData is often empty in WebView cold-start).
+# On production (no RENDER env var) defaults to 0 — requires real Telegram initData.
+_demo_default = "1" if os.getenv("RENDER") else "0"
+DEMO_MODE = os.getenv("DEMO_MODE", _demo_default).strip() == "1"
 
 # Don't crash if BOT_TOKEN missing — start API anyway, log warning
 if not BOT_TOKEN:
@@ -6055,4 +6057,4 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789738671 fix: auto-enable DEMO_MODE on Render (RENDER env var)
+# deploy-trigger 1789738995 fix: DEMO_MODE auto-enable on Render (RENDER env var)
