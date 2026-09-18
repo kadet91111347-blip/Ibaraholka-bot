@@ -13,7 +13,7 @@ import threading
 from contextlib import contextmanager
 
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
-USE_POSTGRES = bool(DATABASE_URL) and os.getenv("DEMO_MODE", "0").strip() != "1"
+USE_POSTGRES = bool(DATABASE_URL)
 
 
 # ---------- Unified cursor wrapper ----------
