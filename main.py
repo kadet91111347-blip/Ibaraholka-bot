@@ -134,11 +134,15 @@ def init_db():
         );
         """)
         # Add column if upgrading (SQLite supports ALTER TABLE ADD COLUMN with try/except)
-        try:
-            conn.execute("ALTER TABLE listings ADD COLUMN channel_message_id INTEGER DEFAULT NULL")
-        except Exception:
+        # IMPORTANT: each ALTER must run in its OWN fresh connection — if one fails
+        # inside the current transaction, Postgres marks the whole tx as aborted and
+        # all subsequent commands return '25P02 current transaction is aborted'.
+        for alter_stmt in [
+            "ALTER TABLE listings ADD COLUMN channel_message_id INTEGER DEFAULT NULL",
+        ]:
             try:
-                conn.rollback()
+                with db_cursor() as c2:
+                    c2.execute(alter_stmt)
             except Exception:
                 pass
         # Postgres upgrade: convert INTEGER columns to BIGINT to fit Telegram user_ids (8-9 digits)
@@ -151,12 +155,10 @@ def init_db():
             "ALTER TABLE listings ADD COLUMN IF NOT EXISTS paid_at INTEGER DEFAULT NULL",
         ]:
             try:
-                conn.execute(alter_stmt)
+                with db_cursor() as c2:
+                    c2.execute(alter_stmt)
             except Exception:
-                try:
-                    conn.rollback()
-                except Exception:
-                    pass
+                pass
         # Same upgrade for conversations / ai_responses / variant_stats / user_profiles / learned_patterns
         for tbl in ('conversations', 'ai_responses', 'variant_stats', 'user_profiles', 'learned_patterns'):
             for alter_stmt in (
@@ -164,12 +166,10 @@ def init_db():
                 f"ALTER TABLE {tbl} ALTER COLUMN created TYPE BIGINT",
             ):
                 try:
-                    conn.execute(alter_stmt)
+                    with db_cursor() as c2:
+                        c2.execute(alter_stmt)
                 except Exception:
-                    try:
-                        conn.rollback()
-                    except Exception:
-                        pass
+                    pass
         conn.executescript("""
         CREATE INDEX IF NOT EXISTS idx_status ON listings(status);
         CREATE INDEX IF NOT EXISTS idx_tier ON listings(tier);
