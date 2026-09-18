@@ -6168,4 +6168,10 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789748000 fix: get_user handles tma demo in PROPER branch (before not authorization check)
+# deploy-trigger 1789748100 fix: get_user handles tma demo in PROPER branch (before not authorization check)
+
+
+# --- deploy-marker-62cfc55: clear-cache signal ---
+@app.get("/__deploy_marker__")
+def _deploy_marker():
+    return {"deployed": "62cfc55", "time": int(time.time())}
