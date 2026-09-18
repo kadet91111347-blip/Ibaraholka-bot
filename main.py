@@ -1817,6 +1817,36 @@ def debug_state():
     return state
 
 
+@app.get("/debug/version")
+def debug_version():
+    """Show which commit is actually deployed (helps detect stale builds)."""
+    import os, subprocess
+    info = {
+        "render_git_sha": (os.getenv("RENDER_GIT_COMMIT_SHA") or "N/A")[:12],
+        "railway_git_sha": (os.getenv("RAILWAY_GIT_COMMIT_SHA") or "N/A")[:12],
+        "module_sha": "unknown",
+    }
+    # Try to detect from module source — find sentinel comment
+    try:
+        src_path = os.path.abspath(__file__)
+        with open(src_path, "r") as f:
+            content = f.read()
+        # find deploy trigger sentinel
+        import re
+        m = re.search(r"# deploy-trigger (\d+)", content)
+        if m:
+            info["module_sha"] = f"trigger-{m.group(1)}"
+        # last main.py commit
+        try:
+            out = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=os.path.dirname(src_path), stderr=subprocess.DEVNULL).decode().strip()
+            info["local_git_sha"] = out
+        except Exception:
+            pass
+    except Exception as e:
+        info["error"] = str(e)
+    return info
+
+
 @app.get("/listings")
 def list_listings(
     cat: Optional[str] = Query(None, pattern="^(iphone|airpods|ipad|mac|watch|accs)$"),
