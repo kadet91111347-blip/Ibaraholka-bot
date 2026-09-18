@@ -151,6 +151,24 @@ class _Pg8000DictConn:
         c = self.cursor()
         return c.execute(sql, params)
 
+    def executescript(self, sql_script):
+        """SQLite-compatible executescript: split on ';' and run each statement.
+        Empty/whitespace scripts are no-ops.
+        """
+        if not sql_script or not sql_script.strip():
+            return
+        # Strip SQL line comments (-- ...) so split doesn't break on them
+        cleaned_lines = []
+        for line in sql_script.split('\n'):
+            stripped = line.split('--', 1)[0]
+            cleaned_lines.append(stripped)
+        cleaned = '\n'.join(cleaned_lines)
+        for stmt in cleaned.split(';'):
+            stmt = stmt.strip()
+            if not stmt:
+                continue
+            self.execute(stmt)
+
     def commit(self):
         self._conn.commit()
 
