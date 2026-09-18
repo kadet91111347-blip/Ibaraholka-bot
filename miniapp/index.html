@@ -15,8 +15,8 @@
   try{
     // TDZ-safe haptic stub — inline onclick не падает с ReferenceError
     window.haptic=window.haptic||function(k){try{var tg=window.Telegram&&window.Telegram.WebApp;if(tg&&tg.HapticFeedback){tg.HapticFeedback.impactOccurred(k);return;}if(navigator.vibrate){var ms=k==='heavy'?30:k==='medium'?20:k==='success'?15:10;navigator.vibrate(ms);}}catch(_){}};
-    var v='v68';
-    var _demoMode=true;
+    var v='v69';
+    _demoMode = true;
     try{
       window.Telegram?.WebApp?.ready?.();
       window.Telegram?.WebApp?.expand?.();
@@ -118,7 +118,7 @@ a{color:inherit;text-decoration:none}
 </style>
 </head>
 <body>
-<div id="vmark" style="background:linear-gradient(90deg,#22C55E,#16A34A);padding:10px;text-align:center;font-size:13px;font-weight:700;color:#0B0B0F">v68 · 17:05 · hide auth warnings in demo mode (tgbar + SellForm)</div>
+<div id="vmark" style="background:linear-gradient(90deg,#22C55E,#16A34A);padding:10px;text-align:center;font-size:13px;font-weight:700;color:#0B0B0F">v69 · 18:05 · fix _demoMode global scope (was inside IIFE, unreachable for guards)</div>
 <script>
 setTimeout(()=>{const m=document.getElementById('vmark');if(m&&location.search.indexOf('keep')<0)m.style.display='none';},12000);
 </script>
