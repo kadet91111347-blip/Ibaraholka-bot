@@ -163,7 +163,8 @@ def init_db():
             created BIGINT NOT NULL,
             expires_at BIGINT,
             channel_message_id BIGINT DEFAULT NULL,
-            paid_at BIGINT DEFAULT NULL
+            paid_at BIGINT DEFAULT NULL,
+            payment_idempotency_key TEXT DEFAULT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_status ON listings(status);
         CREATE INDEX IF NOT EXISTS idx_tier ON listings(tier);
@@ -455,6 +456,7 @@ def init_db():
     # 1) Add missing columns safely (PRAGMA on SQLite, info_schema on Postgres).
     cols_to_add = [
         ("listings", "paid_at", "BIGINT DEFAULT NULL"),
+        ("listings", "payment_idempotency_key", "TEXT DEFAULT NULL"),
         ("user_balances", "vip_until", "INTEGER DEFAULT 0"),
         ("user_balances", "total_spent", "INTEGER NOT NULL DEFAULT 0"),
         ("user_balances", "updated", "BIGINT"),
@@ -1963,12 +1965,16 @@ async def create_listing(item: ListingIn, request: Request):
 
     initial_status = "active" if (item.tier == "free" or is_demo_user or is_admin) else "awaiting_payment"
 
+    # Idempotency key: one payment intent per (listing, hour) — if user re-opens
+    # Mini App and creates a new payment within the same hour, webhooks dedup.
+    idempotency_key = f"payment:{listing_id}:{user['id']}:{int(datetime.now().timestamp()) // 3600}"
+
     with db_cursor() as conn:
         conn.execute(
             """INSERT INTO listings
             (id, user_id, user_name, user_username, title, description, price, cat, type,
-             contact, photo, tier, city, status, created, expires_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+             contact, photo, tier, city, status, created, expires_at, payment_idempotency_key)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 listing_id,
                 user["id"],
@@ -1986,6 +1992,7 @@ async def create_listing(item: ListingIn, request: Request):
                 initial_status,
                 int(datetime.now().timestamp() * 1000),
                 expires_at,
+                idempotency_key,
             ),
         )
         conn.commit()
@@ -2357,9 +2364,12 @@ async def tinkoff_notify(request: Request):
                 "listing_id": listing_id,
                 "instruction": "Оплата зафиксирована. Нажмите «Активировать объявление» в Mini App.",
             }
-        # Mark as paid (NOT active yet — user must explicitly activate)
-        conn.execute(
-            "UPDATE listings SET status='paid', paid_at=? WHERE id=?",
+        # Mark as paid (NOT active yet — user must explicitly activate).
+        # Idempotency: only flip awaiting_payment → paid. If already paid/active,
+        # rowcount=0 → safe to ignore (no double-marking).
+        cur = conn.execute(
+            "UPDATE listings SET status='paid', paid_at=? "
+            "WHERE id=? AND status='awaiting_payment'",
             (int(time.time()), listing_id),
         )
         conn.commit()
@@ -2511,8 +2521,11 @@ async def yukassa_webhook(request: Request):
             ).fetchone()
             if row and row["status"] in ("awaiting_payment", "paid"):
                 if row["status"] != "paid":
+                    # Idempotency: only flip awaiting_payment → paid.
+                    # If a parallel webhook already paid, rowcount=0 — safe.
                     conn.execute(
-                        "UPDATE listings SET status='paid', paid_at=? WHERE id=?",
+                        "UPDATE listings SET status='paid', paid_at=? "
+                        "WHERE id=? AND status='awaiting_payment'",
                         (int(time.time()), listing_id),
                     )
                     conn.commit()
@@ -2725,8 +2738,10 @@ async def ton_verify_payment(request: Request):
             ).fetchone()
             if row and row["status"] in ("awaiting_payment", "paid"):
                 if row["status"] != "paid":
+                    # Idempotency: only flip awaiting_payment → paid.
                     conn.execute(
-                        "UPDATE listings SET status='paid', paid_at=? WHERE id=?",
+                        "UPDATE listings SET status='paid', paid_at=? "
+                        "WHERE id=? AND status='awaiting_payment'",
                         (int(time.time()), listing_id),
                     )
                     conn.commit()
@@ -5462,11 +5477,23 @@ async def confirm_paid_http(listing_id: str, request: Request):
         if row["status"] not in ("awaiting_payment", "paid"):
             raise HTTPException(400, f"bad_status:{row['status']}")
         # Mark as paid; user must then call /payments/activate to publish.
-        conn.execute(
-            "UPDATE listings SET status='paid', paid_at=? WHERE id=?",
+        # Idempotency: AND status='awaiting_payment' guards against double-pressing
+        # "Я оплатил" — second click sees status='paid', rowcount=0, no harm.
+        cur = conn.execute(
+            "UPDATE listings SET status='paid', paid_at=? "
+            "WHERE id=? AND status='awaiting_payment'",
             (int(time.time()), listing_id),
         )
         conn.commit()
+        if cur.rowcount == 0:
+            # Already paid by another webhook — return current state, don't 500.
+            return {
+                "ok": True,
+                "listing_id": listing_id,
+                "tier": row["tier"],
+                "status": "paid",
+                "already_paid": True,
+            }
 
     # Notify user (Mini App will see status='paid' via /status endpoint and show Activate button)
     try:
@@ -6168,7 +6195,7 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789748100 fix: get_user handles tma demo in PROPER branch (before not authorization check)
+# deploy-trigger 1789749100 v72: idempotency guards — UPDATE listings SET status='paid' WHERE status='awaiting_payment' (4 places), payment_idempotency_key column + INSERT
 
 
 # --- deploy-marker-62cfc55: clear-cache signal ---
