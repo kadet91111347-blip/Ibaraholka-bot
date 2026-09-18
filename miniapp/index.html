@@ -13,8 +13,12 @@
 // cleared by the URL itself (?v=…), not by saved-version mismatch.
 (function(){
   try{
-    var v='v64';
-    try{window.Telegram?.WebApp?.ready?.();window.Telegram?.WebApp?.expand?.();}catch(_){}
+    var v='v65';
+    try{
+      window.Telegram?.WebApp?.ready?.();
+      window.Telegram?.WebApp?.expand?.();
+      console.log('[v65] tg.platform='+window.Telegram?.WebApp?.platform+' v='+window.Telegram?.WebApp?.version+' initLen='+(window.Telegram?.WebApp?.initData?.length||0)+' user='+JSON.stringify(window.Telegram?.WebApp?.initDataUnsafe?.user||null));
+    }catch(e){console.warn('[v65] init err',e);}
     localStorage.setItem('__ib_version',v);
     var curParams=new URLSearchParams(location.search).get('v');
     if(!curParams||curParams!==v){
@@ -111,7 +115,7 @@ a{color:inherit;text-decoration:none}
 </style>
 </head>
 <body>
-<div id="vmark" style="background:linear-gradient(90deg,#22C55E,#16A34A);padding:10px;text-align:center;font-size:13px;font-weight:700;color:#0B0B0F">v64 · 15:55 · auth() retry wait (Telegram Android initData fix)</div>
+<div id="vmark" style="background:linear-gradient(90deg,#22C55E,#16A34A);padding:10px;text-align:center;font-size:13px;font-weight:700;color:#0B0B0F">v65 · 16:08 · initData 10s wait + console.log diag</div>
 <script>
 setTimeout(()=>{const m=document.getElementById('vmark');if(m&&location.search.indexOf('keep')<0)m.style.display='none';},12000);
 </script>
@@ -200,8 +204,9 @@ const waitAuth=()=>{
     if(!_tg){resolve(false);return;}
     let n=0;
     const tick=()=>{
-      if(_tg.initData?.length>10){resolve(true);return;}
-      if(++n>30){resolve(false);return;}
+      const len=_tg?.initData?.length||0;
+      if(len>10){console.log('[v65] initData ready len='+len);resolve(true);return;}
+      if(++n>100){console.warn('[v65] initData still empty after 10s — tg.platform='+_tg?.platform+' v='+_tg?.version+' initUnsafe.user='+JSON.stringify(_tg?.initDataUnsafe?.user||null));resolve(false);return;}
       setTimeout(tick,100);
     };
     tick();
