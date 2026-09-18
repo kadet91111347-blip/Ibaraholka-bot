@@ -1,13 +1,6 @@
+from __future__ import annotations  # PEP 563: defer all annotations so PEP 585/604 syntax works on Python 3.7+
 """
 АйБарахолка · Telegram-бот + FastAPI бэкенд
-============================================
-
-Build: 2026-09-14T18:30 force-redeploy-test
-============================================
-- aiogram 3.x для бота (polling режим)
-- FastAPI для HTTP API, который вызывает Telegram Mini App
-- SQLite для хранения объявлений
-- Telegram Stars (XTR) для оплаты платных размещений
 
 Запуск:
     export BOT_TOKEN="..."      # от @BotFather
