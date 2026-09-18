@@ -1,0 +1,33 @@
+services:
+  - type: web
+    name: ibaraholka-bot
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    autoDeploy: true
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: BOT_TOKEN
+        sync: false
+      - key: ADMIN_TOKEN
+        sync: false
+      - key: ADMIN_IDS
+        sync: false
+      - key: CHANNEL
+        sync: false
+      - key: CHANNEL_ID
+        value: "@ibaraholkatyt"
+      - key: WEBAPP_URL
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: TON_WALLET_ADDRESS
+        sync: false
+      - key: TONCENTER_API_KEY
+        sync: false
+      - key: YOOMONEY_WALLET
+        sync: true
+        value: "4100119629651495"

@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Оплата · АйБарахолка</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0B0B0F;--surface:#14141A;--surface2:#1A1A22;--border:#2A2A35;--text:#F5F5F7;--muted:#9A9AA8;--accent:#FF8A4C;--accent-soft:rgba(255,138,76,0.14);--green:#22C55E;--red:#EF4444;--gold:#FFD700;--yellow:#FFCC00}
+html,body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,sans-serif;line-height:1.5;min-height:100vh;padding:20px}
+.pay-card{max-width:420px;margin:0 auto;background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:24px}
+.pay-header{text-align:center;margin-bottom:24px}
+.pay-logo{font-size:30px;font-weight:800;color:var(--accent);margin-bottom:4px}
+.pay-sub{color:var(--muted);font-size:13px}
+.pay-amount{background:linear-gradient(135deg,var(--accent),#FF6A2A);border-radius:16px;padding:18px;text-align:center;color:#0B0B0F;margin-bottom:24px}
+.pay-amount-label{font-size:13px;opacity:0.8}
+.pay-amount-value{font-size:38px;font-weight:800}
+.pay-amount-rub{font-size:14px;opacity:0.85;margin-top:2px}
+.section-label{font-size:11px;text-transform:uppercase;color:var(--muted);letter-spacing:0.05em;margin:18px 0 10px;font-weight:600}
+.methods-grid{display:grid;gap:10px;margin-bottom:16px}
+.method{background:var(--bg);border:2px solid var(--border);border-radius:14px;padding:16px;text-align:center;cursor:pointer;-webkit-tap-highlight-color:transparent;font-family:inherit;transition:all .15s}
+.method:active{transform:scale(0.97)}
+.method.active{border-color:var(--accent);background:var(--accent-soft);box-shadow:0 0 0 2px var(--accent)}
+.method-icon{font-size:32px;margin-bottom:6px}
+.method-name{font-size:15px;font-weight:700;margin-bottom:2px}
+.method-desc{font-size:11px;color:var(--muted)}
+.method.primary{border-color:var(--accent);background:linear-gradient(135deg,rgba(255,138,76,0.12),rgba(255,215,0,0.08))}
+.tbank-card{background:linear-gradient(135deg,#FFDD2D 0%,#FFCC00 100%);border-radius:14px;padding:18px;margin-bottom:14px;cursor:pointer;-webkit-tap-highlight-color:transparent;text-decoration:none;display:block;border:1px solid #E5BD00;transition:transform .15s}
+.tbank-card:active{transform:scale(0.98)}
+.tbank-logo{display:flex;align-items:center;justify-content:center;gap:8px;color:#0B0B0F;font-weight:800;margin-bottom:6px}
+.tbank-name{font-size:18px;font-weight:800;color:#0B0B0F;text-align:center;margin-bottom:4px}
+.tbank-desc{font-size:11px;color:rgba(0,0,0,0.7);text-align:center;line-height:1.4}
+.tbank-arrow{font-size:24px;margin-right:8px}
+.success-card{background:rgba(34,197,94,0.1);border:1px solid var(--green);border-radius:16px;padding:18px;text-align:center}
+.success-icon{font-size:48px;margin-bottom:8px}
+.success-title{font-size:18px;font-weight:700;color:var(--green);margin-bottom:4px}
+.success-text{font-size:13px;color:var(--muted)}
+.btn-pay{width:100%;background:var(--accent);color:#0B0B0F;border:none;border-radius:12px;padding:14px;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit;-webkit-tap-highlight-color:transparent;margin-top:10px}
+.btn-pay:active{transform:scale(0.97)}
+.btn-pay:disabled{opacity:0.5}
+.note{text-align:center;font-size:11px;color:var(--muted);margin-top:14px;line-height:1.5}
+.order-info{background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:14px;font-family:monospace;font-size:11px}
+.order-info b{color:var(--accent)}
+</style>
+</head>
+<body>
+
+<div class="pay-card">
+
+<div class="pay-header">
+<div class="pay-logo">АйБарахолка<span class="pay-sub" style="color:var(--gold);font-weight:700;margin-left:6px">TEST</span></div>
+<div class="pay-sub">Оплата размещения в канале</div>
+</div>
+
+<div class="pay-amount">
+<div class="pay-amount-label">К оплате</div>
+<div class="pay-amount-value" id="amountValue">— ₽</div>
+<div class="pay-amount-rub" id="amountRub">—</div>
+</div>
+
+<div class="order-info">
+<b>Заказ:</b> <span id="orderId">—</span><br>
+<b>Тариф:</b> <span id="tierLabel">—</span>
+</div>
+
+<div class="section-label">⭐ Способ оплаты</div>
+
+<a id="tbankBtn" class="tbank-card" href="https://www.tbank.ru/rm/r_TGugYbYVEb.mLmrPUwlTy/aHI4Y75190" target="_blank" rel="noopener noreferrer">
+<div class="tbank-name">💳 Перевод через Тинькофф</div>
+<div class="tbank-desc">Нажмите чтобы открыть форму оплаты в Тинькофф.<br>После оплаты объявление автоматически активируется.</div>
+</a>
+
+<button type="button" class="btn-pay" id="starsBtn" style="background:linear-gradient(135deg,#FFD700,#FF8A4C);color:#0B0B0F">
+⭐ Оплатить Telegram Stars
+</button>
+
+<button type="button" class="btn-pay" id="tonBtn" style="background:linear-gradient(135deg,#0098EA,#3DDC97);color:#fff">
+💎 Оплатить TON
+</button>
+
+<div id="tonPanel" style="display:none;margin-top:14px;padding:16px;background:rgba(0,152,234,.08);border:1px solid rgba(0,152,234,.3);border-radius:14px;font-size:13px;line-height:1.5">
+  <div id="tonStep1">
+    <b style="color:#3DDC97">Шаг 1 · Отправьте TON</b><br>
+    <span id="tonAmount" style="font-size:22px;font-weight:700;color:#fff">— TON</span>
+    на кошелёк<br>
+    <code id="tonWallet" style="word-break:break-all;color:#3DDC97">…</code><br>
+    с комментарием<br>
+    <code id="tonComment" style="word-break:break-all;color:#FFD700">…</code>
+  </div>
+  <button type="button" class="btn-pay" id="tonVerifyBtn" style="margin-top:12px;background:#3DDC97;color:#0B0B0F">
+    ✅ Я оплатил — проверить
+  </button>
+  <div id="tonStatus" style="margin-top:10px;font-size:12px;color:#aaa"></div>
+</div>
+
+<div class="note">
+⚡ Telegram Stars — оплата внутри мессенджера без комиссий.<br>
+💎 TON — оплата криптой через Tonkeeper/Wallet.<br>
+💳 Тинькофф — оплата картой через банк.
+</div>
+
+</div>
+
+<script>
+const TBANK_URL = 'https://www.tbank.ru/rm/r_TGugYbYVEb.mLmrPUwlTy/aHI4Y75190';
+const API = 'https://ibaraholka-bot.onrender.com';
+const ADMIN_TOKEN = 'JBhQfVVY1h3Q0XOKld3Ri_iFTBiz1bqGBOqsyvs9_m4';
+const FALLBACK_USER = {id: 748834052, first_name: 'Саша', username: 'Izdelie0810'};
+
+var params = new URLSearchParams(window.location.search);
+var listingId = params.get('id') || 'unknown';
+var tier = params.get('tier') || 'vip';
+var amount = tier === 'vip' ? 210 : (tier === 'premium' ? 70 : 0);
+var stars = tier === 'vip' ? 150 : (tier === 'premium' ? 50 : 0);
+
+document.getElementById('amountValue').textContent = amount + ' ₽';
+document.getElementById('amountRub').textContent = tier === 'vip' ? 'VIP · 7 дней · 150 ⭐' : 'TOP · 24 часа · 50 ⭐';
+document.getElementById('orderId').textContent = listingId;
+document.getElementById('tierLabel').textContent = tier === 'vip' ? '👑 VIP 7 дней' : '⭐ TOP 24 часа';
+
+// Build Tinkoff URL with description
+document.getElementById('tbankBtn').href = TBANK_URL + '?successURL=' + encodeURIComponent('https://t.me/Ibaraholka_bot') + '&label=' + encodeURIComponent('АйБарахолка ' + tier + ' #' + listingId.slice(0,8));
+
+// Track payment intent — call backend to mark "waiting for payment"
+fetch(API + '/listings?_t=' + Date.now()).catch(function(){});
+
+// Stars button
+document.getElementById('starsBtn').onclick = function() {
+  if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.openTelegramLink) {
+    window.Telegram.WebApp.openTelegramLink('Ibaraholka_bot');
+  } else {
+    window.open('https://t.me/Ibaraholka_bot', '_blank');
+  }
+};
+
+// TON button
+var _tonState = null;
+document.getElementById('tonBtn').onclick = async function() {
+  var btn = document.getElementById('tonBtn');
+  var panel = document.getElementById('tonPanel');
+  var status = document.getElementById('tonStatus');
+  if (panel.style.display === 'block' && _tonState) {
+    panel.style.display = 'none';
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = '⏳ Создаю платёж…';
+  try {
+    var r = await fetch(API + '/payments/ton/create', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({listing_id: listingId, tier: tier})
+    });
+    var data = await r.json();
+    if (!data.ok) {
+      status.style.color = '#ff6b6b';
+      status.textContent = '⚠️ ' + (data.error || 'ошибка');
+      btn.disabled = false;
+      btn.textContent = '💎 Оплатить TON';
+      return;
+    }
+    _tonState = data;
+    document.getElementById('tonAmount').textContent = data.amount_ton + ' TON';
+    document.getElementById('tonWallet').textContent = data.wallet;
+    document.getElementById('tonComment').textContent = data.comment;
+    status.style.color = '#3DDC97';
+    status.innerHTML = 'Скопируйте комментарий — без него оплата не засчитается. Откройте <b>Tonkeeper</b> / <b>MyTonWallet</b> / <b>OpenMask</b>, отправьте ' + data.amount_ton + ' TON с этим комментарием.';
+    panel.style.display = 'block';
+    btn.textContent = '💎 Свернуть';
+    btn.disabled = false;
+    // Try to open Tonkeeper via deeplink
+    var deeplink = 'ton://transfer/' + data.wallet + '?amount=' + data.amount_nano + '&text=' + encodeURIComponent(data.comment);
+    if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.openTelegramLink) {
+      // we cannot open deeplinks from webview reliably; show instructions instead.
+    }
+  } catch (e) {
+    status.style.color = '#ff6b6b';
+    status.textContent = '⚠️ ' + e.message;
+    btn.disabled = false;
+    btn.textContent = '💎 Оплатить TON';
+  }
+};
+
+document.getElementById('tonVerifyBtn').onclick = async function() {
+  var vbtn = document.getElementById('tonVerifyBtn');
+  var status = document.getElementById('tonStatus');
+  if (!_tonState) return;
+  vbtn.disabled = true;
+  vbtn.textContent = '⏳ Проверяю блокчейн…';
+  status.style.color = '#FFD700';
+  status.textContent = 'Ищу вашу транзакцию в блокчейне TON…';
+  try {
+    var tgUser = (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initDataUnsafe && window.Telegram.WebApp.initDataUnsafe.user) || FALLBACK_USER;
+    var r = await fetch(API + '/payments/ton/verify', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        listing_id: listingId,
+        comment: _tonState.comment,
+        user_id: tgUser.id || 0
+      })
+    });
+    var data = await r.json();
+    if (data.ok && data.verified) {
+      status.style.color = '#3DDC97';
+      status.innerHTML = '✅ <b>Оплата подтверждена!</b> Объявление активировано. Откройте канал @ibaraholkatyt.';
+      vbtn.textContent = '✓ Готово';
+      setTimeout(function() {
+        if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.close) {
+          window.Telegram.WebApp.close();
+        } else {
+          window.location.href = 'https://t.me/ibaraholkatyt';
+        }
+      }, 1800);
+    } else {
+      status.style.color = '#FF8A4C';
+      status.textContent = '⏳ ' + (data.error || 'ещё не вижу транзакцию. Подождите 30с и нажмите снова.');
+      vbtn.disabled = false;
+      vbtn.textContent = '✅ Я оплатил — проверить';
+    }
+  } catch (e) {
+    status.style.color = '#ff6b6b';
+    status.textContent = '⚠️ ' + e.message;
+    vbtn.disabled = false;
+    vbtn.textContent = '✅ Я оплатил — проверить';
+  }
+};
+</script>
+
+</body>
+</html>

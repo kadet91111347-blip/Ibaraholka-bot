@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<title>v24 · 07:22</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,system-ui,sans-serif;background:#0B0B0F;color:#fff;font-size:14px;min-height:100vh;padding-bottom:160px;overflow-x:hidden}
+/* Скрыть Telegram WebApp SDK badge "Made with Spru" — overlay в правом нижнем углу */
+iframe[src*="telegram"]{display:none!important}
+[class*="telegram"]{pointer-events:none}
+div[style*="Made with"]{display:none!important}
+a[href*="t.me"][style*="position:fixed"]{display:none!important}
+/* Наша белая плашка-логотип в правом нижнем углу вместо Spru-бейджа */
+.app-badge{position:fixed;right:14px;bottom:74px;z-index:60;background:rgba(255,255,255,0.08);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.12);border-radius:12px;padding:6px 10px;font-size:11px;font-weight:700;color:rgba(255,255,255,0.55);display:flex;align-items:center;gap:6px;box-shadow:0 4px 16px rgba(0,0,0,0.3)}
+.app-badge::before{content:"🍎";font-size:14px}
+button{font:inherit;cursor:pointer;border:0}
+input,textarea,select{font:inherit;outline:none}
+a{color:inherit;text-decoration:none}
+.hero{padding:24px 16px 16px;text-align:center;background:linear-gradient(180deg,#1a1a22,#0B0B0F)}
+.hero img{width:160px;height:160px;filter:drop-shadow(0 16px 32px rgba(255,138,61,0.3));animation:floaty 4s ease-in-out infinite}
+@keyframes floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+.hero h1{font-size:22px;font-weight:700;margin:8px 0 4px}
+.hero h1 .accent{color:#fb923c}
+.hero p{color:#a1a1aa;font-size:13px;line-height:1.4;max-width:340px;margin:0 auto}
+.search{padding:8px 16px;display:flex;gap:8px;align-items:center}
+.search input{flex:1;background:#1c1c24;border:1px solid #2a2a35;border-radius:12px;padding:10px 14px;color:#fff;font-size:14px}
+.search input:focus{border-color:#fb923c}
+.search-btn{background:#26262E;border-radius:12px;padding:10px;color:#fff}
+.stats{display:flex;gap:8px;padding:8px 16px}
+.stat{flex:1;background:rgba(38,38,46,0.6);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,0.05);border-radius:14px;padding:10px;text-align:center}
+.stat.n{background:rgba(251,146,60,0.1);border-color:rgba(251,146,60,0.3)}
+.stat-n{font-size:18px;font-weight:700;color:#fb923c}
+.stat-l{font-size:10px;color:#a1a1aa;text-transform:uppercase;margin-top:2px}
+.filters{display:flex;gap:6px;padding:8px 16px;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.filters::-webkit-scrollbar{display:none}
+.filter{flex-shrink:0;background:rgba(38,38,46,0.5);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,0.08);border-radius:999px;padding:7px 14px;font-size:12px;color:#d4d4d8;display:flex;align-items:center;gap:4px}
+.filter.active{background:rgba(251,146,60,0.2);border-color:rgba(251,146,60,0.5);color:#fb923c;font-weight:600}
+.list{padding:8px 16px}
+.card{background:rgba(28,28,36,0.6);backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,0.06);border-radius:18px;padding:14px;margin-bottom:10px;display:flex;gap:12px}
+.emoji{width:48px;height:48px;background:linear-gradient(135deg,#26262E,#1c1c24);border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:24px;flex-shrink:0}
+.body{flex:1;min-width:0}
+.row1{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.badge{font-size:10px;background:rgba(55,65,81,0.8);color:#d1d5db;padding:2px 7px;border-radius:6px}
+.badge.vip{background:rgba(251,146,60,0.2);color:#fb923c}
+.badge.top{background:rgba(34,197,94,0.2);color:#22c55e}
+.meta-sm{font-size:11px;color:#a1a1aa}
+.title{font-size:15px;font-weight:600;margin:4px 0 0}
+.price{font-size:18px;font-weight:700;color:#fb923c;margin-top:6px}
+.city{font-size:11px;color:#71717a;margin-top:2px}
+.btns{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
+.btn-write{flex:1;background:linear-gradient(135deg,#FF8A3D,#FF4D00);color:#0B0B0F;border-radius:12px;padding:9px 12px;font-weight:700;font-size:12px;min-height:36px}
+.btn-guarant{background:linear-gradient(135deg,#22C55E,#16A34A);color:#fff;border-radius:12px;padding:9px 12px;font-weight:600;font-size:12px;min-height:36px}
+.btn-icon{background:rgba(38,38,46,0.8);border:1px solid rgba(255,255,255,0.08);border-radius:50%;width:36px;height:36px;color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0}
+.btn-icon.fav-on{background:rgba(251,113,133,0.2);border-color:rgba(251,113,133,0.5);color:#fb7185}
+.empty{text-align:center;padding:50px 20px;color:#a1a1aa}
+.empty img{width:140px;height:140px;margin-bottom:14px}
+.empty-t{font-size:16px;font-weight:600;color:#fff;margin-bottom:4px}
+.empty-s{font-size:12px;color:#a1a1aa;margin-bottom:16px}
+.btn-cta{background:linear-gradient(135deg,#FF8A3D,#FF4D00);color:#0B0B0F;border-radius:12px;padding:12px 28px;font-weight:700;font-size:14px;box-shadow:0 8px 24px rgba(255,138,61,0.35)}
+.btn-cta:active{transform:scale(0.97)}
+.err{background:#7f1d1d;color:#fecaca;padding:12px;border-radius:10px;margin:14px 16px;font-size:13px}
+.nav{position:fixed;left:0;right:0;bottom:0;background:rgba(22,22,28,0.85);backdrop-filter:blur(20px);border-top:1px solid rgba(255,255,255,0.05);padding:8px 0;display:flex;z-index:50}
+.nav-i{flex:1;text-align:center;padding:6px;color:#71717a;font-size:11px;display:flex;flex-direction:column;align-items:center;gap:2px}
+.nav-i.active{color:#fb923c}
+.nav-i-emoji{font-size:20px}
+
+/* Modal */
+.mbg{position:fixed;inset:0;background:rgba(0,0,0,0.75);backdrop-filter:blur(6px);z-index:100;display:flex;align-items:flex-end;justify-content:center;animation:fadein 0.2s}
+@keyframes fadein{from{opacity:0}to{opacity:1}}
+.modal{background:#16161C;border-radius:20px 20px 0 0;width:100%;max-width:480px;max-height:90vh;overflow-y:auto;padding:20px;animation:slideup 0.25s}
+@keyframes slideup{from{transform:translateY(100%)}to{transform:translateY(0)}}
+.modal h2{font-size:18px;margin:0 0 4px}
+.modal .sub{color:#a1a1aa;font-size:12px;margin-bottom:14px}
+.row{margin-bottom:12px}
+.row label{display:block;font-size:12px;color:#a1a1aa;margin-bottom:4px}
+.row input,.row textarea,.row select{width:100%;background:#26262E;border:1px solid #2a2a35;border-radius:10px;padding:10px 12px;color:#fff;font-size:14px}
+.row input:focus,.row textarea:focus{border-color:#fb923c}
+.modal-close{position:absolute;top:14px;right:14px;background:rgba(38,38,46,0.8);border-radius:50%;width:32px;height:32px;color:#fff;font-size:16px;display:flex;align-items:center;justify-content:center}
+.pmethods{display:flex;gap:8px;margin:14px 0}
+.pmethod{flex:1;background:#1c1c24;border:2px solid #2a2a35;border-radius:12px;padding:12px;text-align:center;font-size:13px;cursor:pointer}
+.pmethod.active{border-color:#fb923c;background:rgba(251,146,60,0.1)}
+.pmethod-icon{font-size:24px;margin-bottom:4px}
+.profile-card{background:rgba(38,38,46,0.5);border:1px solid rgba(255,255,255,0.05);border-radius:14px;padding:14px;margin-bottom:10px}
+.profile-card .l{font-size:11px;color:#a1a1aa;text-transform:uppercase}
+.profile-card .v{font-size:18px;font-weight:700;margin-top:2px}
+.profile-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.mt-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.05)}
+.mt-row:last-child{border-bottom:0}
+.mt-l{color:#a1a1aa;font-size:12px}
+.mt-v{font-weight:600}
+.toast{position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#16161C;border:1px solid #2a2a35;color:#fff;padding:10px 16px;border-radius:10px;font-size:13px;z-index:200;box-shadow:0 8px 24px rgba(0,0,0,0.4);animation:fadein 0.2s}
+.copy-link{background:rgba(38,38,46,0.5);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:10px 12px;font-family:monospace;font-size:12px;color:#fb923c;word-break:break-all;margin:8px 0}
+</style>
+</head>
+<body><div class="app-badge">Безопасная сделка</div>
+<script>if(!location.search){location.replace(location.href.split('?')[0]+'?cb='+Date.now());}</script>
+<div id="vmark" style="background:#FF4D00;color:#fff;text-align:center;padding:12px 16px;font-size:17px;font-weight:900;letter-spacing:1px;display:flex;align-items:center;justify-content:center;gap:12px"><span>v24 · 07:22 · НОВАЯ ВЕРСИЯ</span><button onclick="this.parentElement.style.display='none'" style="background:rgba(0,0,0,0.3);color:#fff;border:0;border-radius:8px;padding:4px 10px;font-size:13px;cursor:pointer">✕</button></div>
+<div style="background:#22c55e;color:#0B0B0F;text-align:center;padding:6px;font-size:11px;font-weight:700">v24 · inline onclick · <span id="vts"></span></div>
+<div class="hero">
+  <img src="hero-3d.jpeg" alt="">
+  <div id="tgcta" style="display:none;text-align:center;margin:8px 0 16px"><a href="https://t.me/Ibaraholka_bot" style="display:inline-block;background:linear-gradient(135deg,#2AABEE,#229ED9);color:#fff;text-decoration:none;padding:12px 24px;border-radius:12px;font-weight:700;font-size:14px;box-shadow:0 8px 24px rgba(42,171,238,0.4)">📱 Открыть в Telegram</a></div>
+<h1>Покупай <span class="accent">безопасно</span>.<br>Продавай быстро.</h1>
+  <p>С гарантом сделок. Без посредников. Без комиссий. Прямо в Telegram.</p>
+</div>
+
+<div class="search">
+  <input id="q" placeholder="🔍 Поиск по объявлениям…">
+</div>
+
+<div class="stats">
+  <div class="stat n"><div class="stat-n" id="sTotal">–</div><div class="stat-l">всего</div></div>
+  <div class="stat"><div class="stat-n" id="sToday">–</div><div class="stat-l">сегодня</div></div>
+  <div class="stat"><div class="stat-n" id="sAvail">–</div><div class="stat-l">активных</div></div>
+</div>
+
+<div class="filters" id="filters"></div>
+
+<div id="err"></div>
+<div class="list" id="list"></div>
+
+<nav class="nav">
+  <div class="nav-i active" data-t="feed"><div class="nav-i-emoji">🏠</div><div>Лента</div></div>
+  <div class="nav-i" data-t="profile"><div class="nav-i-emoji">👤</div><div>Профиль</div></div>
+  <div class="nav-i" data-t="match"><div class="nav-i-emoji">🔔</div><div>Подбор</div></div>
+  <div class="nav-i" data-t="refs"><div class="nav-i-emoji">🎁</div><div>Реф</div></div>
+</nav>
+
+<script>
+const API='https://ibaraholka-bot.onrender.com';
+const EMOJI={iphone:'📱',airpods:'🎧',ipad:'💻',mac:'💻',watch:'⌚',accs:'🔌'};
+const CATS=[{k:'all',l:'Все',e:'🍎'},{k:'iphone',l:'iPhone',e:'📱'},{k:'airpods',l:'AirPods',e:'🎧'},{k:'ipad',l:'iPad',e:'💻'},{k:'mac',l:'Mac',e:'💻'},{k:'watch',l:'Watch',e:'⌚'},{k:'accs',l:'Акс',e:'🔌'}];
+
+let allListings=[];
+let favSet=new Set();
+let activeCat='all';
+let searchQ='';
+let myId=null;
+
+const $=(id)=>document.getElementById(id);
+const esc=(s)=>String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const haptic=(k='light')=>{try{const tg=window.Telegram?.WebApp;tg?.HapticFeedback?.impactOccurred(k);}catch(_){}};
+const toast=(m)=>{const d=document.createElement('div');d.className='toast';d.textContent=m;document.body.appendChild(d);setTimeout(()=>d.remove(),2200);};
+const auth=()=>{const tg=window.Telegram?.WebApp;return tg?.initData?{Authorization:'tma '+tg.initData}:{};};
+const me=()=>{const tg=window.Telegram?.WebApp;return tg?.initDataUnsafe?.user||null;};
+const openLink=(u)=>{const tg=window.Telegram?.WebApp;if(tg?.openLink){tg.openLink(u);}else{window.open(u,'_blank');}};
+const closeModal=()=>{document.querySelectorAll('.mbg').forEach(m=>m.remove());};
+
+async function apiGet(p){const r=await fetch(API+p,{cache:'no-store',headers:auth()});if(!r.ok)throw new Error(r.status);return await r.json();}
+async function apiPost(p,b){const r=await fetch(API+p,{method:'POST',headers:{...auth(),'Content-Type':'application/json'},body:JSON.stringify(b||{})});if(!r.ok)throw new Error(r.status);return await r.json();}
+async function apiDelete(p){const r=await fetch(API+p,{method:'DELETE',headers:auth()});if(!r.ok)throw new Error(r.status);return await r.json();}
+
+async function load(){
+  $('list').innerHTML='<div style="text-align:center;padding:30px;color:#a1a1aa">Загрузка…</div>';
+  try{
+    const data=await apiGet('/listings?cb='+Date.now());
+    if(!Array.isArray(data)) throw new Error('Не массив');
+    allListings=data;
+    const todayStart=Math.floor(Date.now()/1000)-86400;
+    $('sTotal').textContent=data.length;
+    $('sToday').textContent=data.filter(l=>{const c=l.created||0;const cs=c>1e10?Math.floor(c/1000):c;return cs>=todayStart;}).length;
+    $('sAvail').textContent=data.filter(l=>l.status!=='sold'&&l.status!=='archived').length;
+    $('err').innerHTML='';
+    if(me()){
+      myId=me().id;
+      try{
+        const favs=await apiGet('/favorites');
+        if(Array.isArray(favs.favorites)) favSet=new Set(favs.favorites.map(f=>f.id||f.listing_id));
+      }catch(_){}
+    }
+    render();
+  }catch(e){
+    $('err').innerHTML='<div class="err">❌ '+esc(e.message)+'</div>';
+    $('list').innerHTML='<button class="btn-cta" onclick="load()">Повторить</button>';
+  }
+}
+
+function render(){
+  const q=searchQ.toLowerCase();
+  const filtered=allListings.filter(l=>{
+    if(activeCat!=='all'&&l.cat!==activeCat) return false;
+    if(q){const text=((l.title||'')+' '+(l.description||'')).toLowerCase();if(!text.includes(q)) return false;}
+    return true;
+  });
+  const list=$('list');
+  if(filtered.length===0){
+    list.innerHTML=`<div class="empty">
+      <img src="empty-3d.jpeg" alt="">
+      <div class="empty-t">${allListings.length===0?'Здесь пока тишина':'Ничего не найдено'}</div>
+      <div class="empty-s">${allListings.length===0?'Будь первым — продай или найди своё':'Попробуй другой запрос'}</div>
+    </div>`;
+    return;
+  }
+  list.innerHTML=filtered.map(l=>{
+    const emoji=EMOJI[l.cat]||'📦';
+    const title=esc(l.title||'(без названия)');
+    const username=esc(l.user_username||l.user_name||'?');
+    let badge='<span class="badge">Free</span>';
+    if(l.tier==='vip') badge='<span class="badge vip">👑 VIP</span>';
+    else if(l.tier==='premium'||l.tier==='top') badge='<span class="badge top">⭐ TOP</span>';
+    const c=l.created||0; const cs=c>1e10?Math.floor(c/1000):c;
+    const date=new Date(cs*1000).toLocaleDateString('ru-RU',{day:'numeric',month:'short'});
+    const price=Number(l.price||0).toLocaleString('ru-RU');
+    const id=esc(l.id);
+    const isFav=favSet.has(l.id);
+    const favIcon=isFav?'❤️':'🤍';
+    const favCls=isFav?'btn-icon fav-on':'btn-icon';
+    return `<div class="card">
+      <div class="emoji">${emoji}</div>
+      <div class="body">
+        <div class="row1">${badge}<span class="meta-sm">@${username} · ${date}</span></div>
+        <h3 class="title">${title}</h3>
+        <div class="price">${price} ₽</div>
+        ${l.city?`<div class="city">📍 ${esc(l.city)}</div>`:''}
+        <div class="btns">
+          <button class="btn-write" onclick="onWrite(this.dataset.username, this.dataset.name)">💬 Написать</button>
+          <button class="btn-guarant" onclick="onGuarant('${id}','${title.replace(/'/g,"\\'")}',${l.price||0})">🛡 Гарант</button>
+          <button class="btn-icon" onclick="onShare('${id}','${title.replace(/'/g,"\\'")}')">📤</button>
+          <button class="${favCls}" onclick="onFav(this,'${id}')">${favIcon}</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// Button handlers — exposed globally for inline onclick
+window.onWrite=function(username,name){
+  haptic('heavy');
+  if(username){openLink('https://t.me/'+username);}
+  else{toast('У продавца нет @username');}
+};
+window.onGuarant=function(id,title,price){
+  haptic('medium');
+  openGuarant(id,title,price);
+};
+window.onShare=function(id,title){
+  haptic('light');
+  shareListing(id,title);
+};
+window.onFav=async function(btn,id){
+  haptic('light');
+  if(!me()){toast('Открой через Telegram-бота');return;}
+  try{
+    const isFav=btn.classList.contains('fav-on');
+    if(isFav){await apiDelete('/favorites/'+id);btn.classList.remove('fav-on');btn.textContent='🤍';toast('Удалено');}
+    else{await apiPost('/favorites/'+id,{});btn.classList.add('fav-on');btn.textContent='❤️';toast('Добавлено');}
+  }catch(err){toast('Ошибка: '+err.message);}
+};
+
+// Legacy event-delegation fallback (kept for older DOM)
+document.addEventListener('click',e=>{
+  if(window.Telegram?.WebApp?.HapticFeedback){
+    const btn=e.target.closest('button, .filter, .nav-i, .btn-icon');
+    if(btn){
+      if(btn.classList.contains('btn-write')) window.Telegram.WebApp.HapticFeedback.impactOccurred('heavy');
+      else if(btn.classList.contains('btn-guarant')) window.Telegram.WebApp.HapticFeedback.impactOccurred('medium');
+      else window.Telegram.WebApp.HapticFeedback.impactOccurred('light');
+    }
+  }
+});
+
+function openGuarant(id,title,price){
+  if(!me()){toast('Открой через Telegram-бота');return;}
+  const html=`<div class="mbg"><div class="modal" style="position:relative">
+    <button class="modal-close" onclick="closeModal()">✕</button>
+    <h2>🛡 Покупка с гарантом</h2>
+    <div class="sub">${title} · <b>${Number(price).toLocaleString('ru-RU')} ₽</b></div>
+    <div class="row"><label>Адрес доставки</label><input id="gAddr" placeholder="ул. Пушкина, д. 10, кв. 5" minlength="5" required></div>
+    <div class="row"><label>Город</label><input id="gCity" placeholder="Москва"></div>
+    <label style="font-size:12px;color:#a1a1aa;margin:10px 0 4px;display:block">Способ оплаты</label>
+    <div class="pmethods">
+      <div class="pmethod active" data-m="tinkoff"><div class="pmethod-icon">💳</div>Тинькофф</div>
+      <div class="pmethod" data-m="ton"><div class="pmethod-icon">💎</div>TON</div>
+    </div>
+    <button class="btn-cta" style="width:100%" id="gGo">Создать сделку</button>
+    <div id="gMsg" style="margin-top:10px;font-size:12px;color:#a1a1aa"></div>
+  </div></div>`;
+  document.body.insertAdjacentHTML('beforeend',html);
+  document.querySelectorAll('.pmethod').forEach(el=>el.addEventListener('click',()=>{
+    document.querySelectorAll('.pmethod').forEach(x=>x.classList.remove('active'));
+    el.classList.add('active');
+  }));
+  $('gGo').addEventListener('click',async()=>{
+    const addr=$('gAddr').value.trim();
+    const city=$('gCity').value.trim();
+    const m=document.querySelector('.pmethod.active')?.dataset.m||'tinkoff';
+    if(addr.length<5){$('gMsg').textContent='❌ Введите полный адрес';return;}
+    $('gMsg').textContent='Создаём сделку…';
+    try{
+      const r=await apiPost('/deals/create',{listing_id:id,payment_method:m,shipping_address:addr,shipping_city:city});
+      if(!r.ok){$('gMsg').textContent='❌ '+(r.error||'Ошибка');return;}
+      $('gMsg').innerHTML='✅ Сделка <b>'+esc(r.deal_id)+'</b> создана. Инструкции по оплате:<br><br>'+
+        (r.payment?.method==='ton'?`<div class="copy-link">${esc(r.payment.wallet)}<br>Сумма: ${r.payment.amount_ton} TON<br>Комментарий: ${esc(r.payment.comment)}</div>`:
+        `<div style="font-size:13px">Переведите <b>${r.payment?.amount_rub||price} ₽</b> на карту:<br><div class="copy-link">${esc(r.payment?.card||'')}</div>В комментарии укажите: <b>${esc(r.deal_id)}</b></div>`);
+      toast('Сделка создана');
+    }catch(err){$('gMsg').textContent='❌ '+err.message;}
+  });
+}
+
+function shareListing(id,title){
+  const url=`https://t.me/Ibaraholka_bot?startapp=list_${id}`;
+  const tg=window.Telegram?.WebApp;
+  if(tg?.openTelegramLink){tg.openTelegramLink(`https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(title)}`);}
+  else if(navigator.share){navigator.share({title,url});}
+  else{navigator.clipboard?.writeText(url);toast('Ссылка скопирована');}
+}
+
+// Profile / Match / Refs modals
+async function openProfile(){
+  if(!me()){toast('Открой через Telegram-бота');return;}
+  try{
+    const r=await apiGet('/profile/me');
+    const u=me();
+    const html=`<div class="mbg"><div class="modal" style="position:relative">
+      <button class="modal-close" onclick="closeModal()">✕</button>
+      <h2>👤 ${esc(u.first_name||'Профиль')}</h2>
+      <div class="sub">@${esc(u.username||'')} · ID ${u.id}</div>
+      <div class="profile-grid">
+        <div class="profile-card"><div class="l">Объявления</div><div class="v">${r.listings_active||0}</div></div>
+        <div class="profile-card"><div class="l">IB Coins</div><div class="v">${r.balance?.coins||0} ⭐</div></div>
+        <div class="profile-card"><div class="l">Подписки</div><div class="v">${r.match_subs?.length||0}</div></div>
+        <div class="profile-card"><div class="l">Рефералы</div><div class="v">${r.referrals_count||0}</div></div>
+      </div>
+      <div class="mt-row"><div class="mt-l">Сделки</div><div class="mt-v">${r.deals?.length||0}</div></div>
+      <div class="mt-row"><div class="mt-l">Избранное</div><div class="mt-v">${r.favorites_count||0}</div></div>
+      <div class="mt-row"><div class="mt-l">Рейтинг продавца</div><div class="mt-v">${r.seller_rating?.avg_rating?r.seller_rating.avg_rating.toFixed(1)+' ⭐':'-'}</div></div>
+      <div class="mt-row"><div class="mt-l">VIP до</div><div class="mt-v">${r.vip_until?new Date(r.vip_until*1000).toLocaleDateString('ru-RU'):'—'}</div></div>
+    </div></div>`;
+    document.body.insertAdjacentHTML('beforeend',html);
+  }catch(err){toast('Ошибка: '+err.message);}
+}
+
+async function openMatch(){
+  if(!me()){toast('Открой через Telegram-бота');return;}
+  try{
+    const subs=await apiGet('/match/subscriptions');
+    const list=Array.isArray(subs.subscriptions)?subs.subscriptions:[];
+    const html=`<div class="mbg"><div class="modal" style="position:relative">
+      <button class="modal-close" onclick="closeModal()">✕</button>
+      <h2>🔔 Бот-подбиратель</h2>
+      <div class="sub">Скажи боту что ищешь — он оповестит о новых объявлениях</div>
+      <div class="row"><label>Что ищешь?</label><input id="mQ" placeholder="напр. iPhone 13 до 30К в Москве"></div>
+      <button class="btn-cta" style="width:100%" id="mGo">Создать подписку</button>
+      <div id="mMsg" style="margin-top:10px;font-size:12px"></div>
+      <h3 style="font-size:14px;margin:18px 0 8px;color:#a1a1aa">Активные (${list.length})</h3>
+      ${list.length===0?'<div style="color:#71717a;font-size:13px">Пока нет подписок</div>':''}
+      ${list.map(s=>`<div class="mt-row"><div><div style="font-weight:600">${esc(s.query||'')}</div><div style="font-size:11px;color:#a1a1aa">${esc(s.filters?.cat||'?')} · до ${s.filters?.max_price||'?'} ₽${s.filters?.city?' · '+esc(s.filters.city):''}</div></div><button class="btn-icon" data-unsub="${esc(s.id)}">✕</button></div>`).join('')}
+    </div></div>`;
+    document.body.insertAdjacentHTML('beforeend',html);
+    $('mGo').addEventListener('click',async()=>{
+      const q=$('mQ').value.trim();
+      if(!q){$('mMsg').textContent='Введите запрос';return;}
+      $('mMsg').textContent='Создаём…';
+      try{
+        const r=await apiPost('/match/subscribe',{query:q});
+        if(r.ok){$('mMsg').textContent='✅ Подписка создана: '+r.subscription_id;setTimeout(closeModal,1500);load();}
+        else if(r.payment_required){$('mMsg').innerHTML='⚠️ Первая бесплатная уже использована. Стоимость: '+r.need_payment+' монет';}
+        else $('mMsg').textContent='❌ '+(r.error||'Ошибка');
+      }catch(err){$('mMsg').textContent='❌ '+err.message;}
+    });
+    document.querySelectorAll('[data-unsub]').forEach(el=>el.addEventListener('click',async()=>{
+      try{await apiDelete('/match/subscriptions/'+el.dataset.unsub);toast('Удалено');el.closest('.mt-row').remove();}
+      catch(err){toast('Ошибка: '+err.message);}
+    }));
+  }catch(err){toast('Ошибка: '+err.message);}
+}
+
+async function openRefs(){
+  if(!me()){toast('Открой через Telegram-бота');return;}
+  try{
+    const r=await apiGet('/referrals/stats');
+    const myRefLink=`https://t.me/Ibaraholka_bot?startapp=ref_${me().id}`;
+    const next=r.next_milestone; const got=r.bonuses||[]; const count=r.count||0;
+    const html=`<div class="mbg"><div class="modal" style="position:relative">
+      <button class="modal-close" onclick="closeModal()">✕</button>
+      <h2>🎁 Реф-лесенка</h2>
+      <div class="sub">Приведи друзей — получай бонусы</div>
+      <div class="profile-card" style="text-align:center">
+        <div class="l">Твоя ссылка</div>
+        <div class="copy-link">${myRefLink}</div>
+        <button class="btn-cta" style="width:100%;margin-top:6px" onclick="navigator.clipboard.writeText('${myRefLink}');toast('Скопировано')">📋 Скопировать</button>
+      </div>
+      <div style="text-align:center;margin:10px 0"><b style="font-size:24px;color:#fb923c">${count}</b> <span style="color:#a1a1aa">друзей привели</span></div>
+      ${next?`<div style="text-align:center;color:#a1a1aa;font-size:12px;margin-bottom:14px">До следующей награды: <b>${next.milestone-count}</b> друзей</div>`:''}
+      <h3 style="font-size:14px;color:#a1a1aa;margin:14px 0 8px">Лесенка наград</h3>
+      <div class="mt-row"><div class="mt-l">1 друг</div><div class="mt-v">${got.find(b=>b.milestone===1)?'✅':'🎁'} 5 монет</div></div>
+      <div class="mt-row"><div class="mt-l">3 друга</div><div class="mt-v">${got.find(b=>b.milestone===3)?'✅':'🎁'} 10 монет</div></div>
+      <div class="mt-row"><div class="mt-l">5 друзей</div><div class="mt-v">${got.find(b=>b.milestone===5)?'✅':'🎁'} 1 день VIP</div></div>
+      <div class="mt-row"><div class="mt-l">15 друзей</div><div class="mt-v">${got.find(b=>b.milestone===15)?'✅':'🎁'} 3 дня VIP</div></div>
+      <div class="mt-row"><div class="mt-l">25 друзей</div><div class="mt-v">${got.find(b=>b.milestone===25)?'✅':'🎁'} неделя VIP</div></div>
+    </div></div>`;
+    document.body.insertAdjacentHTML('beforeend',html);
+  }catch(err){toast('Ошибка: '+err.message);}
+}
+
+document.getElementById('q').addEventListener('input',e=>{searchQ=e.target.value;render();});
+
+document.querySelectorAll('.filter').forEach(el=>el.addEventListener('click',()=>{
+  activeCat=el.dataset.k;buildFilters();render();
+}));
+
+document.querySelectorAll('.nav-i').forEach(el=>el.addEventListener('click',()=>{
+  document.querySelectorAll('.nav-i').forEach(x=>x.classList.remove('active'));
+  el.classList.add('active');
+  haptic('light');
+  const t=el.dataset.t;
+  if(t==='profile') openProfile();
+  else if(t==='match') openMatch();
+  else if(t==='refs') openRefs();
+  else if(t==='feed'){closeModal();}
+}));
+
+function buildFilters(){
+  $('filters').innerHTML=CATS.map(c=>`<div class="filter ${activeCat===c.k?'active':''}" data-k="${c.k}">${c.e} ${c.l}</div>`).join('');
+  document.querySelectorAll('.filter').forEach(el=>el.addEventListener('click',()=>{activeCat=el.dataset.k;buildFilters();render();}));
+}
+
+buildFilters();
+const tg=window.Telegram?.WebApp;const m=document.getElementById('vmark');
+if(tg){tg.ready();tg.expand();setTimeout(()=>{if(m)m.style.display='none';},5000);}
+else{document.getElementById('tgcta').style.display='block';m.innerHTML='🚫 Открой: <a href="https://t.me/Ibaraholka_bot" style="color:#fff;text-decoration:underline">@Ibaraholka_bot</a> → Menu → Открыть<button onclick="this.parentElement.style.display=\'none\'" style="background:rgba(0,0,0,0.3);color:#fff;border:0;border-radius:8px;padding:4px 10px;font-size:13px;cursor:pointer;margin-left:12px">✕</button>';m.style.fontSize='13px';}
+document.getElementById('vts').textContent=new Date().toLocaleTimeString('ru-RU');
+load();
+</script>
+</body>
+</html>
