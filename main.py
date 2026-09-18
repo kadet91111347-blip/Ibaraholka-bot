@@ -110,16 +110,20 @@ print(f"[DB] Using DB file: {DB_FILE}", flush=True)
 # ============================================================
 
 def init_db():
+    from db_adapter import safe_execute
+    # CRITICAL: every ALTER runs on a FRESH single-use connection (not from pool).
+    # If an ALTER fails inside a transaction, Postgres marks that tx as aborted.
+    # safe_execute() opens a one-shot conn, runs the statement, then closes it.
     with db_cursor() as conn:
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS listings (
             id TEXT PRIMARY KEY,
-            user_id INTEGER NOT NULL,
+            user_id BIGINT NOT NULL,
             user_name TEXT,
             user_username TEXT,
             title TEXT NOT NULL,
             description TEXT DEFAULT '',
-            price INTEGER DEFAULT 0,
+            price BIGINT DEFAULT 0,
             cat TEXT NOT NULL,
             type TEXT DEFAULT 'sell',
             contact TEXT NOT NULL,
@@ -127,56 +131,32 @@ def init_db():
             tier TEXT DEFAULT 'free',
             city TEXT DEFAULT 'Москва',
             status TEXT DEFAULT 'pending',
-            created INTEGER NOT NULL,
-            expires_at INTEGER,
-            channel_message_id INTEGER DEFAULT NULL,
-            paid_at INTEGER DEFAULT NULL
+            created BIGINT NOT NULL,
+            expires_at BIGINT,
+            channel_message_id BIGINT DEFAULT NULL,
+            paid_at BIGINT DEFAULT NULL
         );
-        """)
-        # Add column if upgrading (SQLite supports ALTER TABLE ADD COLUMN with try/except)
-        # IMPORTANT: each ALTER must run in its OWN fresh connection — if one fails
-        # inside the current transaction, Postgres marks the whole tx as aborted and
-        # all subsequent commands return '25P02 current transaction is aborted'.
-        for alter_stmt in [
-            "ALTER TABLE listings ADD COLUMN channel_message_id INTEGER DEFAULT NULL",
-        ]:
-            try:
-                with db_cursor() as c2:
-                    c2.execute(alter_stmt)
-            except Exception:
-                pass
-        # Postgres upgrade: convert INTEGER columns to BIGINT to fit Telegram user_ids (8-9 digits)
-        for alter_stmt in [
-            "ALTER TABLE listings ALTER COLUMN user_id TYPE BIGINT",
-            "ALTER TABLE listings ALTER COLUMN price TYPE BIGINT",
-            "ALTER TABLE listings ALTER COLUMN created TYPE BIGINT",
-            "ALTER TABLE listings ALTER COLUMN expires_at TYPE BIGINT",
-            "ALTER TABLE listings ALTER COLUMN channel_message_id TYPE BIGINT",
-            "ALTER TABLE listings ADD COLUMN IF NOT EXISTS paid_at INTEGER DEFAULT NULL",
-        ]:
-            try:
-                with db_cursor() as c2:
-                    c2.execute(alter_stmt)
-            except Exception:
-                pass
-        # Same upgrade for conversations / ai_responses / variant_stats / user_profiles / learned_patterns
-        for tbl in ('conversations', 'ai_responses', 'variant_stats', 'user_profiles', 'learned_patterns'):
-            for alter_stmt in (
-                f"ALTER TABLE {tbl} ALTER COLUMN user_id TYPE BIGINT",
-                f"ALTER TABLE {tbl} ALTER COLUMN created TYPE BIGINT",
-            ):
-                try:
-                    with db_cursor() as c2:
-                        c2.execute(alter_stmt)
-                except Exception:
-                    pass
-        conn.executescript("""
         CREATE INDEX IF NOT EXISTS idx_status ON listings(status);
         CREATE INDEX IF NOT EXISTS idx_tier ON listings(tier);
         CREATE INDEX IF NOT EXISTS idx_cat ON listings(cat);
         CREATE INDEX IF NOT EXISTS idx_user ON listings(user_id);
         CREATE INDEX IF NOT EXISTS idx_created ON listings(created);
         """)
+    # Schema upgrades — each on its own one-shot connection.
+    upgrade_alters = [
+        "ALTER TABLE listings ADD COLUMN IF NOT EXISTS paid_at BIGINT DEFAULT NULL",
+        "ALTER TABLE listings ALTER COLUMN user_id TYPE BIGINT",
+        "ALTER TABLE listings ALTER COLUMN price TYPE BIGINT",
+        "ALTER TABLE listings ALTER COLUMN created TYPE BIGINT",
+        "ALTER TABLE listings ALTER COLUMN expires_at TYPE BIGINT",
+        "ALTER TABLE listings ALTER COLUMN channel_message_id TYPE BIGINT",
+    ]
+    for alter in upgrade_alters:
+        safe_execute(alter)
+    for tbl in ('conversations', 'ai_responses', 'variant_stats',
+                'user_profiles', 'learned_patterns'):
+        for col in ('user_id', 'created'):
+            safe_execute(f"ALTER TABLE {tbl} ALTER COLUMN {col} TYPE BIGINT")
 
         # ===== SELF-LEARNING BOT TABLES =====
         conn.executescript("""

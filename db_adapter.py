@@ -273,6 +273,42 @@ def db_cursor():
     return get_db_connection()
 
 
+def safe_execute(sql, params=None):
+    """Execute a single statement on a FRESH connection (NOT from pool).
+    Use for init_db ALTERs that may leave connections in aborted state.
+    Always closes the connection. Returns True on success, False on error.
+    """
+    if not USE_POSTGRES:
+        import sqlite3
+        try:
+            conn = sqlite3.connect(os.getenv("DB_PATH", "ibaraholka.db"))
+            conn.execute(sql, params or ())
+            conn.commit()
+            conn.close()
+            return True
+        except Exception:
+            try: conn.close()
+            except: pass
+            return False
+
+    try:
+        conn = _pg8000_connect()
+        cur = conn.cursor()
+        cur.execute(sql, params or ())
+        conn.commit()
+        try: conn.close()
+        except: pass
+        return True
+    except Exception:
+        try:
+            conn.rollback()
+            conn.close()
+        except Exception:
+            try: conn.close()
+            except: pass
+        return False
+
+
 def migrate_sqlite_to_pg(*args, **kwargs):
     """Stub: migration already done in main.py at startup. No-op here."""
     return None
