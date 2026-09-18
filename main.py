@@ -566,7 +566,7 @@ TIER_DURATIONS = {"premium": 24 * 3600, "vip": 7 * 24 * 3600}  # seconds
 TIER_LABELS = {"free": "Бесплатно", "premium": "⭐ TOP 24ч (50⭐)", "vip": "👑 VIP 7 дней (150⭐)"}
 
 # TON Connect prices (in TON; ~280 RUB/TON)
-TON_WALLET_ADDRESS = os.getenv("TON_WALLET_ADDRESS", "UQPLACEHOLDER_SET_IN_RENDER_ENV").strip()
+TON_WALLET_ADDRESS = os.getenv("TON_WALLET_ADDRESS", "UQCAhDLD17FVwmprVze2V35mICOqjmEpBdJF-cJyCZqfph-3").strip()
 TON_PRICES = {"premium": 0.25, "vip": 0.75}  # TON
 TONCENTER_API = os.getenv("TONCENTER_API", "https://toncenter.com/api/v2")
 TON_NANOTON = 1_000_000_000
