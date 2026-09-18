@@ -6074,4 +6074,4 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789713500 final fix: combined executescript with BIGINT schema + safe_execute for ALTERs
+# deploy-trigger 1789714500 fix fetchone/fetchall final fix: combined executescript with BIGINT schema + safe_execute for ALTERs

@@ -251,15 +251,28 @@ class _Pg8000DictCursor:
         row = self._c.fetchone()
         if row is None:
             return None
-        desc = [d[0] for d in self._c.description]
-        return dict(zip(desc, row))
+        # pg8000 native cursor returns tuples; description is set after execute.
+        # If a row is already a dict (some drivers), return as-is.
+        if isinstance(row, dict):
+            return row
+        desc = self._c.description
+        if desc:
+            names = [d[0] for d in desc]
+            return dict(zip(names, row))
+        # Fallback: positional access only — caller uses n[0]
+        return row
 
     def fetchall(self):
         rows = self._c.fetchall()
         if not rows:
             return []
-        desc = [d[0] for d in self._c.description]
-        return [dict(zip(desc, row)) for row in rows]
+        if isinstance(rows[0], dict):
+            return rows
+        desc = self._c.description
+        if desc:
+            names = [d[0] for d in desc]
+            return [dict(zip(names, row)) for row in rows]
+        return rows
 
     def close(self):
         try:
