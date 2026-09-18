@@ -1594,8 +1594,11 @@ MINIAPP_DIR = pathlib.Path(__file__).parent / "miniapp"
 
 @app.get("/mini", response_class=HTMLResponse)
 @app.get("/mini/", response_class=HTMLResponse)
+@app.head("/mini")
+@app.head("/mini/")
 async def mini_app():
-    """Отдаёт index.html Mini App"""
+    """Отдаёт index.html Mini App. HEAD нужен для Telegram WebView на Android
+    (делает HEAD preflight перед GET — без HEAD-роута получали 405 → '404 Not Found')."""
     p = MINIAPP_DIR / "index.html"
     if not p.exists():
         return HTMLResponse(content="<h1>Mini App not deployed</h1>", status_code=404)
@@ -1606,6 +1609,7 @@ async def mini_app():
     })
 
 @app.get("/mini/{filename:path}")
+@app.head("/mini/{filename:path}")
 async def mini_static(filename: str):
     from fastapi.responses import HTMLResponse, FileResponse
     p = MINIAPP_DIR / filename
@@ -6056,4 +6060,4 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789715500 add RealDictCursor
+# deploy-trigger 1789734500 add RealDictCursor + HEAD methods for /mini
