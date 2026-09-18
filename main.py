@@ -460,7 +460,8 @@ async def get_user(authorization: str = Header(None)) -> Dict[str, Any]:
     the user from initData params so demos still work but as real-looking users.
     """
     if not authorization or not authorization.startswith("tma "):
-        if DEMO_MODE:
+        # Special case: header "tma demo" → bypass auth in DEMO_MODE
+        if authorization == "tma demo" and DEMO_MODE:
             # Accept demo request (bypasses Telegram auth for browser testing)
             return {
                 "id": 999999,
@@ -6057,4 +6058,4 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789738995 fix: DEMO_MODE auto-enable on Render (RENDER env var)
+# deploy-trigger 1789739133 fix: get_user accepts header "tma demo" in DEMO_MODE
