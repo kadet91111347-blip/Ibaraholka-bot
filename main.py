@@ -6105,3 +6105,5 @@ async def setup_webhook(request: Request):
             "max_connections": info.max_connections,
         }
     }
+
+f# deploy-trigger 1789698345 Саша сделал Manual Deploy но Render скачал СТАРУЮ версию
