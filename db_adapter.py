@@ -26,6 +26,10 @@ class _CursorAdapter:
         self._conn = native_conn
 
     def execute(self, sql, params=None):
+        # Auto-convert SQLite-style ? placeholders to psycopg2 %s for Postgres
+        backend = type(self._c).__module__.split(".")[0]
+        if backend != "sqlite3" and params is not None and "?" in sql:
+            sql = sql.replace("?", "%s")
         if params is None:
             self._c.execute(sql)
         else:
@@ -33,6 +37,9 @@ class _CursorAdapter:
         return self
 
     def executemany(self, sql, seq):
+        backend = type(self._c).__module__.split(".")[0]
+        if backend != "sqlite3" and "?" in sql:
+            sql = sql.replace("?", "%s")
         self._c.executemany(sql, seq)
         return self
 
@@ -110,6 +117,9 @@ class _CursorAdapter:
                 cleaned_lines.append(line)
             cleaned = "\n".join(cleaned_lines).strip()
             if cleaned:
+                # Convert ? to %s for psycopg2
+                if "?" in cleaned:
+                    cleaned = cleaned.replace("?", "%s")
                 self._c.execute(cleaned)
         return self
 
