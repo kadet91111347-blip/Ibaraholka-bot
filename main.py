@@ -114,6 +114,30 @@ print(f"[DB] Using DB file: {DB_FILE}", flush=True)
 # Database
 # ============================================================
 
+
+
+def _add_column_if_not_exists(table: str, column: str, decl: str) -> None:
+    """Idempotently add a column on both SQLite and Postgres.
+
+    SQLite: ALTER TABLE ... ADD COLUMN (no IF NOT EXISTS — check via PRAGMA table_info).
+    Postgres: ALTER TABLE ... ADD COLUMN IF NOT EXISTS.
+    """
+    from db_adapter import get_db_connection
+    with get_db_connection() as conn:
+        if USE_POSTGRES:
+            conn.execute(
+                f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {decl}"
+            )
+            conn.commit()
+        else:
+            cur = conn.execute(f"PRAGMA table_info({table})")
+            existing = {row[1] for row in cur.fetchall()}
+            if column not in existing:
+                # decl like "BIGINT DEFAULT NULL" or "INTEGER NOT NULL DEFAULT 0"
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+                conn.commit()
+
+
 def init_db():
     from db_adapter import safe_execute
     # CRITICAL: every ALTER runs on a FRESH single-use connection (not from pool).
@@ -427,21 +451,17 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_ton_payments_comment ON ton_payments(comment);
         """)
 
-    # Schema upgrades — each on its own one-shot connection.
-    upgrade_alters = [
-        "ALTER TABLE listings ADD COLUMN IF NOT EXISTS paid_at BIGINT DEFAULT NULL",
-        "ALTER TABLE listings ALTER COLUMN user_id TYPE BIGINT",
-        "ALTER TABLE listings ALTER COLUMN price TYPE BIGINT",
-        "ALTER TABLE listings ALTER COLUMN created TYPE BIGINT",
-        "ALTER TABLE listings ALTER COLUMN expires_at TYPE BIGINT",
-        "ALTER TABLE listings ALTER COLUMN channel_message_id TYPE BIGINT",
+    # Schema upgrades — cross-DB (SQLite + Postgres).
+    # 1) Add missing columns safely (PRAGMA on SQLite, info_schema on Postgres).
+    cols_to_add = [
+        ("listings", "paid_at", "BIGINT DEFAULT NULL"),
+        ("user_balances", "vip_until", "INTEGER DEFAULT 0"),
+        ("user_balances", "total_spent", "INTEGER NOT NULL DEFAULT 0"),
+        ("user_balances", "updated", "BIGINT"),
     ]
-    for alter in upgrade_alters:
-        safe_execute(alter)
-    for tbl in ('conversations', 'ai_responses', 'variant_stats',
-                'user_profiles', 'learned_patterns'):
-        for col in ('user_id', 'created'):
-            safe_execute(f"ALTER TABLE {tbl} ALTER COLUMN {col} TYPE BIGINT")
+    for tbl, col, decl in cols_to_add:
+        _add_column_if_not_exists(tbl, col, decl)
+    # 2) No-op for type changes — SQLite uses flexible typing, Postgres already correct.
 
 
 # ============================================================
@@ -6148,4 +6168,4 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789746000 fix: get_user handles tma demo in PROPER branch (before not authorization check)
+# deploy-trigger 1789747000 fix: get_user handles tma demo in PROPER branch (before not authorization check)
