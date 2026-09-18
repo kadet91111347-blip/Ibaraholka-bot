@@ -13,7 +13,7 @@
 // cleared by the URL itself (?v=…), not by saved-version mismatch.
 (function(){
   try{
-    var v='v59';
+    var v='v60';
     localStorage.setItem('__ib_version',v);
     var curParams=new URLSearchParams(location.search).get('v');
     if(!curParams||curParams!==v){
@@ -136,16 +136,10 @@ if(typeof window.Telegram==='undefined'||!window.Telegram.WebApp||!window.Telegr
 
 <div class="stats">
   <div class="stat n" data-mode="all" onclick="statMode='all';render();buildFilters();
-const _fetchTimeout=60000;
-function _toPR(p,t){return Promise.race([p,new Promise((_,r)=>setTimeout(()=>r(new Error('network-timeout')),t||_fetchTimeout))]);}
 "><div class="stat-n" id="sTotal">–</div><div class="stat-l">всего</div></div>
   <div class="stat" data-mode="today" onclick="statMode='today';render();buildFilters();
-const _fetchTimeout=60000;
-function _toPR(p,t){return Promise.race([p,new Promise((_,r)=>setTimeout(()=>r(new Error('network-timeout')),t||_fetchTimeout))]);}
 "><div class="stat-n" id="sToday">–</div><div class="stat-l">сегодня</div></div>
   <div class="stat" data-mode="avail" onclick="statMode='avail';render();buildFilters();
-const _fetchTimeout=60000;
-function _toPR(p,t){return Promise.race([p,new Promise((_,r)=>setTimeout(()=>r(new Error('network-timeout')),t||_fetchTimeout))]);}
 "><div class="stat-n" id="sAvail">–</div><div class="stat-l">активных</div></div>
 </div>
 
@@ -200,6 +194,8 @@ const me=()=>{const tg=window.Telegram?.WebApp;return tg?.initDataUnsafe?.user||
 const openLink=(u)=>{const tg=window.Telegram?.WebApp;if(tg?.openLink){tg.openLink(u);}else{window.open(u,'_blank');}};
 const closeModal=()=>{document.querySelectorAll('.mbg').forEach(m=>m.remove());};
 
+const _fetchTimeout=60000;
+function _toPR(p,t){return Promise.race([p,new Promise((_,r)=>setTimeout(()=>r(new Error('network-timeout')),t||_fetchTimeout))]);};
 async function apiGet(p){const r=await _toPR(fetch(API+p,{cache:'no-store',headers:auth()}),60000);if(!r.ok)throw new Error(r.status);return await r.json();}
 async function apiPost(p,b){
   const r=await fetch(API+p,{method:'POST',headers:{...auth(),'Content-Type':'application/json'},body:JSON.stringify(b||{})});
@@ -1097,8 +1093,6 @@ document.getElementById('q').addEventListener('input',e=>{searchQ=e.target.value
 
 document.querySelectorAll('.filter').forEach(el=>el.addEventListener('click',()=>{
   activeCat=el.dataset.k;buildFilters();
-const _fetchTimeout=60000;
-function _toPR(p,t){return Promise.race([p,new Promise((_,r)=>setTimeout(()=>r(new Error('network-timeout')),t||_fetchTimeout))]);}
 render();
 }));
 
@@ -1116,8 +1110,6 @@ document.querySelectorAll('.nav-i').forEach(el=>el.addEventListener('click',()=>
 function buildFilters(){
   $('filters').innerHTML=CATS.map(c=>`<div class="filter ${activeCat===c.k?'active':''}" data-k="${c.k}">${c.e} ${c.l}</div>`).join('');
   document.querySelectorAll('.filter').forEach(el=>el.addEventListener('click',()=>{activeCat=el.dataset.k;buildFilters();
-const _fetchTimeout=60000;
-function _toPR(p,t){return Promise.race([p,new Promise((_,r)=>setTimeout(()=>r(new Error('network-timeout')),t||_fetchTimeout))]);}
 render();}));
   // Подсветить активную статистику
   document.querySelectorAll('.stat').forEach(el=>{
@@ -1127,8 +1119,6 @@ render();}));
 }
 
 buildFilters();
-const _fetchTimeout=60000;
-function _toPR(p,t){return Promise.race([p,new Promise((_,r)=>setTimeout(()=>r(new Error('network-timeout')),t||_fetchTimeout))]);}
 
 const tg=window.Telegram?.WebApp;
 if(tg){tg.ready();tg.expand();}
