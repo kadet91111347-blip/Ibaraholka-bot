@@ -6129,4 +6129,4 @@ async def setup_webhook(request: Request):
         }
     }
 
-f# deploy-trigger 1789698345 Саша сделал Manual Deploy но Render скачал СТАРУЮ версию
+# deploy-trigger 1789698345 Саша сделал Manual Deploy но Render скачал СТАРУЮ версию
