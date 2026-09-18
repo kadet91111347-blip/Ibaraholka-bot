@@ -1,0 +1,15 @@
+# Secrets
+.env
+.env.*
+*.db
+*.sqlite
+__pycache__/
+.browser/
+.spru/
+media/inbound/
+zona-backend/
+zona.db
+ibaraholka.db
+*.pyc
+*.tar.gz
+*.zip
