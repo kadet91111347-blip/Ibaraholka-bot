@@ -2138,13 +2138,47 @@ async def create_listing(item: ListingIn, request: Request):
     real_status = initial_status
     if item.tier in ("premium", "vip") and invoice_error and not is_demo_user:
         real_status = "active"  # downgraded to free → becomes active
+    # Build payment URLs to return alongside the listing — so the Mini App
+    # client doesn't need a separate /payments/yukassa/create round-trip.
+    # All three are always present (tinkoff_url with hardcoded params from
+    # the Mini App config, TON wallet + comment, and Stars deeplink).
+    from urllib.parse import quote
+    tier_for_pay = "free" if (invoice_error and not is_demo_user) else item.tier
+    payment_urls = {}
+    if tier_for_pay in ("premium", "vip") and not is_demo_user and not is_admin:
+        rub_amount = TIER_PRICES.get(tier_for_pay, 0) * 1.4
+        rub_amount = int(rub_amount) or 70
+        # Tinkoff quick-pay (the Mini App also has a hardcoded variant of this)
+        payment_urls["tinkoff_url"] = (
+            f"https://www.tinkoff.ru/rm/r_TGugYbYVEb.mLmrPUwlTy"
+            f"?amount={rub_amount * 100}"
+            f"&successURL=https://t.me/Ibaraholka_bot?start=paid_{listing_id}"
+        )
+        # TON: wallet address + comment (user transfers manually from any TON wallet)
+        ton_prices = {"premium": 0.25, "vip": 0.75}
+        ton_amount = ton_prices.get(tier_for_pay, 0.75)
+        import hashlib
+        _h = hashlib.md5(listing_id.encode()).hexdigest()[:8]
+        ton_comment = f"ib_{listing_id}_{_h}"
+        payment_urls["ton"] = {
+            "wallet": TON_WALLET_ADDRESS,
+            "amount": ton_amount,
+            "comment": ton_comment,
+            "ton_url": f"ton://transfer/{TON_WALLET_ADDRESS}?amount={int(ton_amount * 1e9)}&text={ton_comment}",
+        }
+        # Telegram Stars deeplink — bot will re-send the invoice
+        payment_urls["stars_deeplink"] = (
+            f"https://t.me/Ibaraholka_bot?start=pay_{listing_id}_{tier_for_pay}"
+        )
+
     return {
         "id": listing_id,
         "status": real_status,
-        "tier": ("free" if (invoice_error and not is_demo_user) else item.tier),
+        "tier": tier_for_pay,
         "invoice_sent": invoice_msg_id is not None,
         "invoice_error": invoice_error,
         "skip_invoice_reason": skip_invoice_reason,
+        "payment_urls": payment_urls,
     }
 
 
@@ -6195,7 +6229,7 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789749100 v72: idempotency guards — UPDATE listings SET status='paid' WHERE status='awaiting_payment' (4 places), payment_idempotency_key column + INSERT
+# deploy-trigger 1789750000 v72: idempotency guards — UPDATE listings SET status='paid' WHERE status='awaiting_payment' (4 places), payment_idempotency_key column + INSERT
 
 
 # --- deploy-marker-62cfc55: clear-cache signal ---
