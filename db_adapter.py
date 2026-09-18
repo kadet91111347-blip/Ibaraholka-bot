@@ -115,20 +115,51 @@ def get_db_connection():
         raw = _PG_POOL.getconn()
         try:
             raw.cursor_factory = RealDictCursor
+            # Ensure any previous aborted transaction is cleared
+            try: raw.rollback()
+            except: pass
             yield raw
         finally:
+            try: raw.rollback()
+            except: pass
             _PG_POOL.putconn(raw)
     else:
-        # pg8000 manual pool
+        # pg8000 manual pool — try to return to pool, but fall back to close on errors.
+        recycled = False
         with _PG_POOL["lock"]:
             if _PG_POOL["free"]:
                 conn = _PG_POOL["free"].pop()
             else:
-                if len(_PG_POOL["used"]) >= _PG_POOL["max"]:
-                    raise _PostgresUnavailable("Pool exhausted")
-                conn = _pg8000_connect()
-                _PG_POOL["used"].add(id(conn))
+                if len(_PG_POOL["used"]) < _PG_POOL["max"]:
+                    try:
+                        conn = _pg8000_connect()
+                        _PG_POOL["used"].add(id(conn))
+                    except Exception as e:
+                        raise _PostgresUnavailable(f"connect failed: {e}")
+                else:
+                    # Pool exhausted — make a one-shot connection (don't return to pool)
+                    try:
+                        conn = _pg8000_connect()
+                        recycled = True
+                    except Exception as e:
+                        raise _PostgresUnavailable(f"pool full + connect failed: {e}")
+        # If recycled (one-shot) we don't need the lock/used bookkeeping.
+        if recycled:
+            # Reset any leftover transaction state
+            try: conn.rollback()
+            except: pass
+            try:
+                yield _Pg8000DictConn(conn)
+            finally:
+                try: conn.rollback()
+                except: pass
+                try: conn.close()
+                except: pass
+            return
         try:
+            # Reset any aborted state from previous user of this connection
+            try: conn.rollback()
+            except: pass
             yield _Pg8000DictConn(conn)
         finally:
             # ALWAYS reset any aborted/pending transaction before returning to pool —
@@ -136,7 +167,12 @@ def get_db_connection():
             try:
                 conn.rollback()
             except Exception:
-                pass
+                # If rollback fails (broken connection), close it instead of returning broken.
+                try: conn.close()
+                except: pass
+                with _PG_POOL["lock"]:
+                    _PG_POOL["used"].discard(id(conn))
+                return
             with _PG_POOL["lock"]:
                 _PG_POOL["free"].append(conn)
                 _PG_POOL["used"].discard(id(conn))
