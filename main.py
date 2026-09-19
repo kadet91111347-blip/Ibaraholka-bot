@@ -6475,7 +6475,7 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789754000 v76: Stars invoice прямо в Mini App (tg.openInvoice). Endpoint POST /payments/stars/invoice — создаёт invoice через createInvoiceLink Bot API (currency=XTR), возвращает invoice_url.
+# deploy-trigger 1789757000 v79: VIP/Premium теперь всегда awaiting_payment (убран demo-bypass). tg.openInvoice + 2s fallback на openLink.
 
 
 # --- deploy-marker-62cfc55: clear-cache signal ---
