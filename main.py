@@ -6475,7 +6475,7 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789757000 v79: VIP/Premium теперь всегда awaiting_payment (убран demo-bypass). tg.openInvoice + 2s fallback на openLink.
+# deploy-trigger 1789758000 v80: invoice URL всегда виден (кнопки copy + open) — даже если Mini App открыт в Chrome без Telegram SDK.
 
 
 # --- deploy-marker-62cfc55: clear-cache signal ---

@@ -15,7 +15,7 @@
   try{
     // TDZ-safe haptic stub — inline onclick не падает с ReferenceError
     window.haptic=window.haptic||function(k){try{var tg=window.Telegram&&window.Telegram.WebApp;if(tg&&tg.HapticFeedback){tg.HapticFeedback.impactOccurred(k);return;}if(navigator.vibrate){var ms=k==='heavy'?30:k==='medium'?20:k==='success'?15:10;navigator.vibrate(ms);}}catch(_){}};
-    var v='v79';
+    var v='v80';
     _demoMode = true;
     try{
       window.Telegram?.WebApp?.ready?.();
@@ -118,7 +118,7 @@ a{color:inherit;text-decoration:none}
 </style>
 </head>
 <body>
-<div id="vmark" style="background:linear-gradient(90deg,#22C55E,#16A34A);padding:10px;text-align:center;font-size:13px;font-weight:700;color:#0B0B0F">v79 · 07:00 · VIP/Premium теперь всегда ждут оплаты (demo-bypass убран). tg.openInvoice + fallback openLink.</div>
+<div id="vmark" style="background:linear-gradient(90deg,#22C55E,#16A34A);padding:10px;text-align:center;font-size:13px;font-weight:700;color:#0B0B0F">v80 · 07:35 · invoice URL виден ВСЕГДА (кнопки copy + open) — даже если открыл Mini App в Chrome без Telegram SDK</div>
 <script>
 setTimeout(()=>{const m=document.getElementById('vmark');if(m&&location.search.indexOf('keep')<0)m.style.display='none';},12000);
 </script>
@@ -720,51 +720,56 @@ function openSellForm(showWarning){
           sBtn.innerHTML=oldHtml;
           sBtn.textContent='⏳ Открываю оплату…';
           sBtn.disabled=false;
-          // v79: tg.openInvoice с fallback chain — если callback не сработал за 2 сек,
-          // пробуем openLink, потом window.open. Иначе invoice мог "не открыться".
+          // v80: tg.openInvoice работает только в Telegram Mini App SDK ≥ 6.0.
+          // Если открыли в Chrome — показываем модалку с invoice URL + copy + open.
           const isValidInvoice = data.invoice_url && data.invoice_url.startsWith('https://t.me/$');
-          console.log('[v79 payStars] isValidInvoice:',isValidInvoice,'url:',data.invoice_url);
-          if(!isValidInvoice){
-            // fallback: простой deeplink в бота
-            if(tg&&tg.openLink){
-              try{tg.openLink(data.invoice_url,{try_in_app_browser:true});}catch(e){}
-            }else{
-              window.open(data.invoice_url,'_blank');
-            }
-            toast('🏦 Открыл ссылку на оплату');
+          const hasInvoiceSDK = tg && typeof tg.openInvoice === 'function';
+          console.log('[v80 payStars] SDK:',hasInvoiceSDK,'valid:',isValidInvoice,'url:',data.invoice_url);
+
+          const showInvoiceModal=(reason)=>{
+            const deeplink = data.invoice_url.startsWith('https://t.me/$')
+              ? data.invoice_url
+              : (data.invoice_url || ('https://t.me/Ibaraholka_bot?start=pay_'+listingId+'_'+tier));
+            const starsLabel = tier==='vip'?'⭐ 150 (VIP)':tier==='premium'?'⭐ 50 (Premium)':'⭐ '+(data.stars_amount||'?');
+            const safeLink = deeplink.replace(/'/g, "\\'");
+            const html=`<div class="mbg" style="position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)this.remove()"><div style="background:#18181b;border:1px solid #FFDD2D;border-radius:14px;padding:18px;max-width:380px;width:100%"><div style="font-size:18px;font-weight:700;color:#FFDD2D;margin-bottom:6px">⭐ Оплата ${starsLabel}</div><div style="font-size:13px;color:#a1a1aa;margin-bottom:12px">${reason}</div><div style="background:#0B0B0F;border-radius:10px;padding:10px;margin-bottom:12px;word-break:break-all;font-family:monospace;font-size:11px;color:#22C55E">${deeplink}</div><button class="btn-cta" style="width:100%;background:#FFDD2D;color:#0B0B0F;font-weight:700;padding:12px;border-radius:10px;border:none;font-size:14px;cursor:pointer;margin-bottom:8px" onclick="try{navigator.clipboard.writeText('${safeLink}').then(()=>{this.textContent='✅ Скопировано!';setTimeout(()=>this.textContent='📋 Скопировать ссылку',2000)}).catch(()=>{this.textContent='Скопируй вручную'})}catch(e){}">📋 Скопировать ссылку</button><button class="btn-cta" style="width:100%;background:#22C55E;color:#0B0B0F;font-weight:700;padding:12px;border-radius:10px;border:none;font-size:14px;cursor:pointer;margin-bottom:8px" onclick="window.open('${safeLink}','_blank')">🚀 Открыть в новой вкладке</button><button class="btn-cta" style="width:100%;background:#26262E;color:#a1a1aa;padding:10px;border-radius:10px;border:none;font-size:13px;cursor:pointer" onclick="this.closest('.mbg').remove()">Закрыть</button></div></div>`;
+            document.body.insertAdjacentHTML('beforeend', html);
+          };
+
+          if(!hasInvoiceSDK){
+            showInvoiceModal('Открой ссылку в Telegram, нажми «Оплатить ⭐» — листинг активируется.');
             sBtn.innerHTML=oldHtml;sBtn.disabled=false;
             return;
           }
-          let invoiceOpened=false;
-          if(tg&&typeof tg.openInvoice==='function'){
-            try{
-              tg.openInvoice(data.invoice_url,(status)=>{
-                invoiceOpened=true;
-                console.log('[v79 payStars] invoice status:',status);
-                if(status==='paid'){
-                  haptic('success');
-                  toast('🎉 Оплата прошла!');
-                  closeModal();
-                  if(typeof loadListings==='function')loadListings();
-                }else if(status==='cancelled'){
-                  toast('Оплата отменена');
-                }else if(status==='failed'){
-                  toast('❌ Ошибка оплаты');
-                }
-                sBtn.innerHTML=oldHtml;sBtn.disabled=false;
-              });
-            }catch(e){console.error('[v79] openInvoice err',e);}
+          if(!isValidInvoice){
+            showInvoiceModal('Скопируй ссылку и открой в Telegram:');
+            sBtn.innerHTML=oldHtml;sBtn.disabled=false;
+            return;
           }
-          // v79: fallback через 2 сек если callback не сработал (значит openInvoice не сработал)
+
+          let invoiceOpened=false;
+          try{
+            tg.openInvoice(data.invoice_url,(status)=>{
+              invoiceOpened=true;
+              console.log('[v80 payStars] invoice status:',status);
+              if(status==='paid'){
+                haptic('success');
+                toast('🎉 Оплата прошла!');
+                closeModal();
+                if(typeof loadListings==='function')loadListings();
+              }else if(status==='cancelled'){
+                toast('Оплата отменена');
+              }else if(status==='failed'){
+                toast('❌ Ошибка оплаты');
+              }
+              sBtn.innerHTML=oldHtml;sBtn.disabled=false;
+            });
+          }catch(e){console.error('[v80] openInvoice err',e);}
+
           setTimeout(()=>{
             if(invoiceOpened)return;
-            console.warn('[v79 payStars] invoice not opened in 2s — fallback openLink');
-            if(tg&&tg.openLink){
-              try{tg.openLink(data.invoice_url,{try_in_app_browser:true});}catch(e){}
-              toast('🏦 Открыл ссылку для оплаты');
-            }else{
-              window.open(data.invoice_url,'_blank');
-            }
+            console.warn('[v80 payStars] invoice not opened in 2s — showing URL');
+            showInvoiceModal('Если invoice не открылся — скопируй ссылку и открой в Telegram:');
             sBtn.innerHTML=oldHtml;sBtn.disabled=false;
           },2000);
         }catch(err){
