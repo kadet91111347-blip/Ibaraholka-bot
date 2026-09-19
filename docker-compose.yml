@@ -1,0 +1,31 @@
+version: "3.9"
+
+# Local development stack for Ibaraholka.
+# Usage:
+#   cp .env.example .env  # then fill BOT_TOKEN, DATABASE_URL, etc.
+#   docker compose up --build
+
+services:
+  api:
+    build: .
+    container_name: ibaraholka-api
+    ports:
+      - "10000:10000"
+    env_file:
+      - .env
+    environment:
+      PORT: "10000"
+      DB_PATH: "/data/ibaraholka.db"
+    volumes:
+      - ibaraholka-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,os; urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('PORT','10000')+'/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  ibaraholka-data:
+    driver: local

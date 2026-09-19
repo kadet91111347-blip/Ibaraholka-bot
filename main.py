@@ -86,6 +86,24 @@ logging.basicConfig(
 )
 logger = logging.getLogger("ibaraholka")
 
+# Optional Sentry error tracking — activates only if SENTRY_DSN is set
+# и sentry-sdk установлен. Без этого всё работает как раньше.
+_sentry_dsn = os.getenv("SENTRY_DSN", "").strip()
+if _sentry_dsn:
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.fastapi import FastApiIntegration
+        from sentry_sdk.integrations.logging import LoggingIntegration
+        sentry_sdk.init(
+            dsn=_sentry_dsn,
+            integrations=[FastApiIntegration(), LoggingIntegration(level=logging.INFO)],
+            traces_sample_rate=0.1,
+            environment=os.getenv("ENVIRONMENT", "production"),
+        )
+        logger.info("✅ Sentry initialized")
+    except ImportError:
+        logger.warning("SENTRY_DSN set but sentry-sdk not installed — skipping")
+
 # Initialize bot only if token is present
 bot = None
 dp = None
@@ -1657,7 +1675,25 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="АйБарахолка API", version="1.0.0", lifespan=lifespan)
+tags_metadata = [
+    {"name": "listings", "description": "Каталог объявлений: создание, поиск, статус, оплата, активация."},
+    {"name": "payments", "description": "Платёжные потоки: Т-Банк/ЮKassa, TON, Telegram Stars."},
+    {"name": "favorites", "description": "Избранные объявления пользователя."},
+    {"name": "profile", "description": "Профиль пользователя: баланс IB Coins, активные листинги, VIP."},
+    {"name": "deals", "description": "Сделки между продавцом и покупателем + чат по сделке."},
+    {"name": "match", "description": "Подписки на совпадения по запросу (q + cat + city + max_price)."},
+    {"name": "reports", "description": "Жалобы на листинги (spam/fraud/duplicate/...) + админ-модерация."},
+    {"name": "admin", "description": "Админ-эндпоинты: требуют x-admin-token или Authorization админа."},
+    {"name": "debug", "description": "Служебные эндпоинты: health, version, state, toggle-demo. Не для прода."},
+    {"name": "miniapp", "description": "Раздача Mini App (HTML/JS)."},
+]
+
+app = FastAPI(
+    title="АйБарахолка API",
+    version="1.0.0",
+    lifespan=lifespan,
+    openapi_tags=tags_metadata,
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -1669,6 +1705,57 @@ app.add_middleware(
 
 # GZip compression for responses >= 500 bytes — cuts JSON payload ~70% (3.5KB → 1KB)
 app.add_middleware(GZipMiddleware, minimum_size=500)
+
+
+# ============================================================
+# Rate limiting (встроенный middleware, без внешних зависимостей)
+# ============================================================
+# Защита от спама и brute-force на sensitive endpoints:
+#   /listings (POST), /payments/*, /admin/wipe-all-listings, /reports/{id}
+# Окна: 60s / endpoint+ip. При превышении — 429.
+import time as _time
+from collections import defaultdict as _defaultdict
+
+_RATE_BUCKETS = _defaultdict(list)  # (endpoint, ip) -> [timestamps]
+_RATE_LIMITS = {
+    ("POST", "/listings"): (10, 60),         # 10 объявлений в минуту
+    ("POST", "/payments/stars/invoice"): (20, 60),  # 20 invoice в минуту
+    ("POST", "/payments/ton/create"): (10, 60),
+    ("POST", "/payments/yukassa/create"): (10, 60),
+    ("POST", "/payments/activate"): (10, 60),
+    ("POST", "/reports"): (20, 60),
+    ("POST", "/admin/wipe-all-listings"): (2, 60),
+    ("POST", "/listings/{id}/confirm-paid"): (20, 60),
+}
+
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    key = (request.method, request.url.path)
+    if key in _RATE_LIMITS:
+        limit, window = _RATE_LIMITS[key]
+        # Use X-Forwarded-For if behind Render proxy, else client.host
+        ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "unknown")
+        bucket = _RATE_BUCKETS[(key, ip)]
+        now = _time.time()
+        # Drop expired
+        bucket[:] = [t for t in bucket if now - t < window]
+        if len(bucket) >= limit:
+            return _json_response(status_code=429, content={
+                "ok": False,
+                "error": "rate_limit_exceeded",
+                "limit": limit,
+                "window_seconds": window,
+                "retry_after": int(window - (now - bucket[0])) if bucket else 1,
+            })
+        bucket.append(now)
+    return await call_next(request)
+
+
+def _json_response(*args, **kwargs):
+    """Helper for middleware to return JSONResponse without circular import."""
+    from fastapi.responses import JSONResponse
+    return JSONResponse(*args, **kwargs)
 
 
 # === Mini App static serving (v24.html + картинки) ===
@@ -1712,13 +1799,33 @@ def health():
     """Health check that also keeps the DB connection pool warm.
     Without this, the first request after a quiet period would pay the
     Neon TCP+TLS+auth handshake (~300ms). With it, the pool stays primed.
+    Returns subsystem status (db, bot, channel) so Render/pingdom can route.
     """
+    db_ok = True
+    db_kind = "sqlite"
     try:
         with db_cursor() as conn:
             conn.execute("SELECT 1").fetchone()
-    except Exception:
-        pass  # health check never fails on DB
-    return {"ok": True, "ts": int(datetime.now().timestamp())}
+        db_kind = "postgres" if USE_POSTGRES else "sqlite"
+    except Exception as e:
+        db_ok = False
+
+    bot_ok = bool(bot and getattr(bot, "token", None))
+
+    # Best-effort: bot started & dispatcher alive
+    dp_ok = bool(dp and getattr(dp, "storage", None))
+
+    overall_ok = db_ok  # DB is the only hard requirement
+    return {
+        "ok": overall_ok,
+        "ts": int(datetime.now().timestamp()),
+        "checks": {
+            "db": {"ok": db_ok, "kind": db_kind},
+            "bot": {"ok": bot_ok},
+            "dispatcher": {"ok": dp_ok},
+        },
+        "version": app.version,
+    }
 
 
 @app.get("/debug/logs")
@@ -6475,7 +6582,7 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789759000 v81: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
+# deploy-trigger 1789760000 v82: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
 
 
 # --- deploy-marker-62cfc55: clear-cache signal ---
