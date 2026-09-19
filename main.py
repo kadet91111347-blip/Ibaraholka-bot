@@ -47,7 +47,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 import re as _re_webapp
 # Render hosts Mini App on /mini — same domain as API, no CORS, no CSP/X-Frame-Options.
 # spru.io/v6.html is dead (404) and has CSP frame-ancestors 'none' that breaks WebView.
-_render_default = "https://ibaraholka-bot.onrender.com/mini?v=v62"
+_render_default = "https://ibaraholka-bot.onrender.com/mini"
 _raw_webapp = os.getenv("WEBAPP_URL", _render_default).strip()
 WEBAPP_URL = _raw_webapp
 if WEBAPP_URL and '://' not in WEBAPP_URL:
@@ -2268,7 +2268,7 @@ async def create_listing(item: ListingIn, request: Request):
                 )],
                 [InlineKeyboardButton(
                     text="📱 Открыть барахолку",
-                    web_app=WebAdmin_URL if False else WEBAPP_URL
+                    web_app=WebAppInfo(url=WEBAPP_URL)
                 )],
             ])
             await bot.send_message(user["id"], notify_text, reply_markup=notify_kb)
@@ -6652,7 +6652,7 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789761000 v82: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
+# deploy-trigger 1789762000 v82: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
 
 
 # --- deploy-marker-62cfc55: clear-cache signal ---
