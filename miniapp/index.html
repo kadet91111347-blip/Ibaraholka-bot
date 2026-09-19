@@ -15,7 +15,7 @@
   try{
     // TDZ-safe haptic stub — inline onclick не падает с ReferenceError
     window.haptic=window.haptic||function(k){try{var tg=window.Telegram&&window.Telegram.WebApp;if(tg&&tg.HapticFeedback){tg.HapticFeedback.impactOccurred(k);return;}if(navigator.vibrate){var ms=k==='heavy'?30:k==='medium'?20:k==='success'?15:10;navigator.vibrate(ms);}}catch(_){}};
-    var v='v76';
+    var v='v79';
     _demoMode = true;
     try{
       window.Telegram?.WebApp?.ready?.();
@@ -118,7 +118,7 @@ a{color:inherit;text-decoration:none}
 </style>
 </head>
 <body>
-<div id="vmark" style="background:linear-gradient(90deg,#22C55E,#16A34A);padding:10px;text-align:center;font-size:13px;font-weight:700;color:#0B0B0F">v76 · 18:05 · Stars invoice прямо в Mini App (tg.openInvoice)</div>
+<div id="vmark" style="background:linear-gradient(90deg,#22C55E,#16A34A);padding:10px;text-align:center;font-size:13px;font-weight:700;color:#0B0B0F">v79 · 07:00 · VIP/Premium теперь всегда ждут оплаты (demo-bypass убран). tg.openInvoice + fallback openLink.</div>
 <script>
 setTimeout(()=>{const m=document.getElementById('vmark');if(m&&location.search.indexOf('keep')<0)m.style.display='none';},12000);
 </script>
@@ -720,28 +720,53 @@ function openSellForm(showWarning){
           sBtn.innerHTML=oldHtml;
           sBtn.textContent='⏳ Открываю оплату…';
           sBtn.disabled=false;
-          // tg.openInvoice поддерживается в Mini App SDK ≥ 6.0
-          if(tg&&tg.openInvoice){
-            tg.openInvoice(data.invoice_url,(status)=>{
-              console.log('[v76 payStars] invoice status:',status);
-              if(status==='paid'){
-                haptic('success');
-                toast('🎉 Оплата прошла!');
-                closeModal();
-                if(typeof loadListings==='function')loadListings();
-              }else if(status==='cancelled'){
-                toast('Оплата отменена');
-              }else if(status==='failed'){
-                toast('❌ Ошибка оплаты');
-              }
-              sBtn.innerHTML=oldHtml;sBtn.disabled=false;
-            });
-          }else{
-            // Фоллбек для web/desktop — откроем deeplink
-            window.open(data.invoice_url,'_blank');
-            toast('Открыл ссылку на оплату');
+          // v79: tg.openInvoice с fallback chain — если callback не сработал за 2 сек,
+          // пробуем openLink, потом window.open. Иначе invoice мог "не открыться".
+          const isValidInvoice = data.invoice_url && data.invoice_url.startsWith('https://t.me/$');
+          console.log('[v79 payStars] isValidInvoice:',isValidInvoice,'url:',data.invoice_url);
+          if(!isValidInvoice){
+            // fallback: простой deeplink в бота
+            if(tg&&tg.openLink){
+              try{tg.openLink(data.invoice_url,{try_in_app_browser:true});}catch(e){}
+            }else{
+              window.open(data.invoice_url,'_blank');
+            }
+            toast('🏦 Открыл ссылку на оплату');
             sBtn.innerHTML=oldHtml;sBtn.disabled=false;
+            return;
           }
+          let invoiceOpened=false;
+          if(tg&&typeof tg.openInvoice==='function'){
+            try{
+              tg.openInvoice(data.invoice_url,(status)=>{
+                invoiceOpened=true;
+                console.log('[v79 payStars] invoice status:',status);
+                if(status==='paid'){
+                  haptic('success');
+                  toast('🎉 Оплата прошла!');
+                  closeModal();
+                  if(typeof loadListings==='function')loadListings();
+                }else if(status==='cancelled'){
+                  toast('Оплата отменена');
+                }else if(status==='failed'){
+                  toast('❌ Ошибка оплаты');
+                }
+                sBtn.innerHTML=oldHtml;sBtn.disabled=false;
+              });
+            }catch(e){console.error('[v79] openInvoice err',e);}
+          }
+          // v79: fallback через 2 сек если callback не сработал (значит openInvoice не сработал)
+          setTimeout(()=>{
+            if(invoiceOpened)return;
+            console.warn('[v79 payStars] invoice not opened in 2s — fallback openLink');
+            if(tg&&tg.openLink){
+              try{tg.openLink(data.invoice_url,{try_in_app_browser:true});}catch(e){}
+              toast('🏦 Открыл ссылку для оплаты');
+            }else{
+              window.open(data.invoice_url,'_blank');
+            }
+            sBtn.innerHTML=oldHtml;sBtn.disabled=false;
+          },2000);
         }catch(err){
           console.error('[v76 payStars] error:',err);
           toast('❌ '+String(err).slice(0,100));

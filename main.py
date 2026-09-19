@@ -1997,7 +1997,7 @@ async def create_listing(item: ListingIn, request: Request):
     if item.tier in TIER_DURATIONS:
         expires_at = int(datetime.now().timestamp()) + TIER_DURATIONS[item.tier]
 
-    initial_status = "active" if (item.tier == "free" or is_demo_user or is_admin) else "awaiting_payment"
+    initial_status = "active" if (item.tier == "free" or is_admin) else "awaiting_payment"
 
     # Idempotency key: one payment intent per (listing, hour) — if user re-opens
     # Mini App and creates a new payment within the same hour, webhooks dedup.
