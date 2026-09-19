@@ -143,8 +143,13 @@ def init_db():
     # CRITICAL: every ALTER runs on a FRESH single-use connection (not from pool).
     # If an ALTER fails inside a transaction, Postgres marks that tx as aborted.
     # safe_execute() opens a one-shot conn, runs the statement, then closes it.
-    with db_cursor() as conn:
-        conn.executescript("""
+    #
+    # Cross-DB DDL: `conn.executescript` works on raw sqlite3.Connection, but
+    # psycopg2.connection has NO executescript — we must split into statements
+    # for Postgres. Easiest: use _CursorAdapter (returned by db_cursor on Postgres)
+    # which has its own executescript that splits on `;`. For SQLite fallback
+    # we just keep raw sqlite3 connection's native executescript.
+    _script = """
         CREATE TABLE IF NOT EXISTS listings (
             id TEXT PRIMARY KEY,
             user_id BIGINT NOT NULL,
@@ -466,7 +471,17 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_reports_listing ON reports(listing_id);
         CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status, created DESC);
         CREATE INDEX IF NOT EXISTS idx_reports_reporter ON reports(reporter_id, created DESC);
-        """)
+        """
+
+    if USE_POSTGRES:
+        # Postgres path: db_cursor() returns _CursorAdapter which has executescript
+        # that splits on `;` for psycopg2.
+        with db_cursor() as cur:
+            cur.executescript(_script)
+    else:
+        # SQLite path: raw sqlite3.Connection has native executescript.
+        with db_cursor() as conn:
+            conn.executescript(_script)
 
     # Schema upgrades — cross-DB (SQLite + Postgres).
     # 1) Add missing columns safely (PRAGMA on SQLite, info_schema on Postgres).
@@ -6373,7 +6388,7 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789751000 v72: idempotency guards — UPDATE listings SET status='paid' WHERE status='awaiting_payment' (4 places), payment_idempotency_key column + INSERT
+# deploy-trigger 1789752000 v72: idempotency guards — UPDATE listings SET status='paid' WHERE status='awaiting_payment' (4 places), payment_idempotency_key column + INSERT
 
 
 # --- deploy-marker-62cfc55: clear-cache signal ---
