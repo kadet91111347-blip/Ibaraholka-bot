@@ -2936,9 +2936,8 @@ async def create_stars_invoice(request: Request, user: Dict = Depends(get_user))
         req = urllib.request.Request(
             f"https://api.telegram.org/bot{BOT_TOKEN}/createInvoiceLink",
             data=data,
-            timeout=15,
         )
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req, timeout=15) as resp:
             result = json.loads(resp.read().decode())
         if not result.get("ok"):
             logger.error(f"createInvoiceLink failed: {result}")
