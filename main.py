@@ -121,21 +121,24 @@ def _add_column_if_not_exists(table: str, column: str, decl: str) -> None:
 
     SQLite: ALTER TABLE ... ADD COLUMN (no IF NOT EXISTS — check via PRAGMA table_info).
     Postgres: ALTER TABLE ... ADD COLUMN IF NOT EXISTS.
+
+    Uses db_cursor() (which returns _CursorAdapter with .execute()) — NOT
+    get_db_connection() (which returns raw psycopg2 connection on Postgres,
+    and psycopg2.connection has NO .execute() method).
     """
-    from db_adapter import get_db_connection
-    with get_db_connection() as conn:
+    from db_adapter import db_cursor
+    with db_cursor() as cur:
         if USE_POSTGRES:
-            conn.execute(
+            cur.execute(
                 f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {decl}"
             )
-            conn.commit()
         else:
-            cur = conn.execute(f"PRAGMA table_info({table})")
-            existing = {row[1] for row in cur.fetchall()}
+            row = cur.execute(f"PRAGMA table_info({table})").fetchone()
+            # PRAGMA table_info returns many rows; need to iterate
+            cur.execute(f"PRAGMA table_info({table})")
+            existing = {r["name"] for r in cur.fetchall()}
             if column not in existing:
-                # decl like "BIGINT DEFAULT NULL" or "INTEGER NOT NULL DEFAULT 0"
-                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
-                conn.commit()
+                cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
 def init_db():
@@ -6388,7 +6391,7 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789752000 v72: idempotency guards — UPDATE listings SET status='paid' WHERE status='awaiting_payment' (4 places), payment_idempotency_key column + INSERT
+# deploy-trigger 1789753000 v75: fix _add_column_if_not_exists uses db_cursor() instead of raw psycopg2 connection (psycopg2 has no .execute() method). PRAGMA returns dict rows via _CursorAdapter.
 
 
 # --- deploy-marker-62cfc55: clear-cache signal ---
