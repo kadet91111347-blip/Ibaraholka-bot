@@ -5977,6 +5977,76 @@ async def admin_listings(admin_token: str = ""):
         return [dict(r) for r in rows]
 
 
+@app.get("/admin/ui/me")
+async def admin_ui_me(request: Request):
+    """Check whether the current Telegram user is an admin (via ADMIN_IDS).
+    Used by Mini App to render the admin panel automatically.
+    No secrets exposed — just a boolean and user info.
+    """
+    user = await get_user(request.headers.get("authorization", ""))
+    uid = user.get("id") if isinstance(user, dict) else None
+    is_admin = uid is not None and int(uid) in ADMIN_IDS
+    return {
+        "ok": True,
+        "is_admin": is_admin,
+        "user_id": uid,
+        "first_name": user.get("first_name") if isinstance(user, dict) else None,
+        "username": user.get("username") if isinstance(user, dict) else None,
+    }
+
+
+@app.get("/admin/ui/stats")
+async def admin_ui_stats(request: Request):
+    """Admin dashboard stats: counts, revenue, recent activity.
+    Auth by Telegram user.id in ADMIN_IDS (no x-admin-token needed in Mini App).
+    """
+    user = await get_user(request.headers.get("authorization", ""))
+    uid = user.get("id") if isinstance(user, dict) else None
+    if uid is None or int(uid) not in ADMIN_IDS:
+        raise HTTPException(403, "Admin only")
+    with db_cursor() as conn:
+        # Listings by status
+        by_status = {r["status"]: r["c"] for r in conn.execute(
+            "SELECT status, COUNT(*) AS c FROM listings GROUP BY status"
+        ).fetchall()}
+        # Listings by tier
+        by_tier = {r["tier"]: r["c"] for r in conn.execute(
+            "SELECT tier, COUNT(*) AS c FROM listings GROUP BY tier"
+        ).fetchall()}
+        # Total users (distinct)
+        users_total = conn.execute(
+            "SELECT COUNT(DISTINCT user_id) AS c FROM listings"
+        ).fetchone()["c"]
+        # Revenue (paid listings)
+        revenue = conn.execute(
+            "SELECT COALESCE(SUM(price),0) AS total FROM listings WHERE status='active' AND tier IN ('premium','vip')"
+        ).fetchone()["total"]
+        # Pending reports
+        reports_pending = conn.execute(
+            "SELECT COUNT(*) AS c FROM reports WHERE status='pending'"
+        ).fetchone()["c"]
+        # Last 7 days activity
+        seven_days_ago = int(datetime.now().timestamp()) - 7 * 86400
+        recent = conn.execute(
+            "SELECT COUNT(*) AS c FROM listings WHERE created >= ?",
+            (seven_days_ago,),
+        ).fetchone()["c"]
+        # Last 5 listings (any status)
+        last = [dict(r) for r in conn.execute(
+            "SELECT id, title, tier, status, price, user_name, created FROM listings ORDER BY created DESC LIMIT 5"
+        ).fetchall()]
+    return {
+        "ok": True,
+        "listings_by_status": by_status,
+        "listings_by_tier": by_tier,
+        "users_total": users_total,
+        "revenue_total": revenue,
+        "reports_pending": reports_pending,
+        "recent_7d": recent,
+        "last_listings": last,
+    }
+
+
 @app.post("/admin/demo-mode")
 async def admin_toggle_demo(payload: dict, admin_token: str = ""):
     """Toggle DEMO_MODE at runtime without redeploying.
@@ -6582,7 +6652,7 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789760000 v82: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
+# deploy-trigger 1789761000 v82: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
 
 
 # --- deploy-marker-62cfc55: clear-cache signal ---
