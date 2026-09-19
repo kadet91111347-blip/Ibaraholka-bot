@@ -2949,10 +2949,18 @@ async def create_stars_invoice(request: Request, user: Dict = Depends(get_user))
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"createInvoiceLink exception: {e}")
+        err_msg = f"{type(e).__name__}: {e}"
+        logger.error(f"createInvoiceLink exception: {err_msg}")
         # Fallback: deeplink to bot
         bot_deeplink = f"https://t.me/Ibaraholka_bot?start=pay_{listing_id}_{tier}"
-        return {"ok": True, "invoice_url": bot_deeplink, "fallback": True, "stars_amount": amount, "tier": tier}
+        return {
+            "ok": True,
+            "invoice_url": bot_deeplink,
+            "fallback": True,
+            "stars_amount": amount,
+            "tier": tier,
+            "error": err_msg,  # v77: вернуть ошибку для дебага
+        }
 
 
 # ============================================================
