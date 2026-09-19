@@ -15,7 +15,7 @@
   try{
     // TDZ-safe haptic stub — inline onclick не падает с ReferenceError
     window.haptic=window.haptic||function(k){try{var tg=window.Telegram&&window.Telegram.WebApp;if(tg&&tg.HapticFeedback){tg.HapticFeedback.impactOccurred(k);return;}if(navigator.vibrate){var ms=k==='heavy'?30:k==='medium'?20:k==='success'?15:10;navigator.vibrate(ms);}}catch(_){}};
-    var v='v80';
+    var v='v81';
     _demoMode = true;
     try{
       window.Telegram?.WebApp?.ready?.();
@@ -118,7 +118,7 @@ a{color:inherit;text-decoration:none}
 </style>
 </head>
 <body>
-<div id="vmark" style="background:linear-gradient(90deg,#22C55E,#16A34A);padding:10px;text-align:center;font-size:13px;font-weight:700;color:#0B0B0F">v80 · 07:35 · invoice URL виден ВСЕГДА (кнопки copy + open) — даже если открыл Mini App в Chrome без Telegram SDK</div>
+<div id="vmark" style="background:linear-gradient(90deg,#22C55E,#16A34A);padding:10px;text-align:center;font-size:13px;font-weight:700;color:#0B0B0F">v81 · 07:55 · модалка оплаты открывается ВСЕГДА (loadListings в try/catch — cold start Render больше не блокирует)</div>
 <script>
 setTimeout(()=>{const m=document.getElementById('vmark');if(m&&location.search.indexOf('keep')<0)m.style.display='none';},12000);
 </script>
@@ -592,6 +592,8 @@ function openSellForm(showWarning){
       window.__lastTier=tier;
       toast('✅ Объявление создано!');
       haptic('success');
+      // v81 fix: модалка оплаты откроется ниже в основном flow (после closeModal+loadListings),
+      // loadListings теперь обёрнут в try/catch — не блокирует показ модалки
     }catch(e){
       console.error('[sell] error',e);
       btn.disabled=false;btn.textContent='Опубликовать';
@@ -624,7 +626,8 @@ function openSellForm(showWarning){
       return; // НЕ закрываем модалку
     }
     closeModal();
-    await loadListings();
+    // v81: loadListings может упасть на cold start Render — НЕ блокируем показ модалки оплаты
+    try{ await loadListings(); }catch(e){ console.warn('[sell] loadListings failed:',e); toast('⚠️ Лента обновится через пару секунд — нажми «Повторить» вверху'); }
     // Для платных тарифов — v55: сразу открываем Т-Банк через /payments/yukassa/create + window.location.href
     if(tier!=='free'){
       const stars=tier==='vip'?150:50;

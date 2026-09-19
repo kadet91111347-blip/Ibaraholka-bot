@@ -6475,7 +6475,7 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789758000 v80: invoice URL всегда виден (кнопки copy + open) — даже если Mini App открыт в Chrome без Telegram SDK.
+# deploy-trigger 1789759000 v81: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
 
 
 # --- deploy-marker-62cfc55: clear-cache signal ---
