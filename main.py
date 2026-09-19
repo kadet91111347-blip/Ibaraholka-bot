@@ -2878,6 +2878,83 @@ async def ton_wallet_info():
     }
 
 
+@app.post("/payments/stars/invoice")
+async def create_stars_invoice(request: Request, user: Dict = Depends(get_user)):
+    """Create a Telegram Stars invoice via createInvoiceLink.
+
+    Returns {invoice_url} that the Mini App opens with tg.openInvoice(url, callback).
+    After payment, the bot receives successful_payment and activates the listing.
+    """
+    user_id_int = int(user["id"])
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "JSON body required")
+    listing_id = (body.get("listing_id") or "").strip()
+    if not listing_id:
+        raise HTTPException(400, "listing_id required")
+
+    with db_cursor() as conn:
+        row = conn.execute(
+            "SELECT title, price, tier, city FROM listings WHERE id=? AND user_id=?",
+            (listing_id, user_id_int),
+        ).fetchone()
+
+    if not row:
+        raise HTTPException(404, "Listing not found or not yours")
+
+    def _g(k, i):
+        return row[k] if isinstance(row, dict) else row[i]
+    title = _g("title", 0)
+    price = _g("price", 1)
+    tier = _g("tier", 2)
+    city = _g("city", 3)
+
+    amount = TIER_PRICES.get(tier)
+    if not amount:
+        raise HTTPException(400, f"Unknown tier: {tier}")
+    if tier == "free":
+        raise HTTPException(400, "Free tier doesn't need payment")
+
+    tier_name = "TOP 24 часа" if tier == "premium" else "VIP 7 дней"
+    description = f"📱 <b>{title}</b>\n\n💰 {price} ₽ · 📍 {city}\n\n<b>{tier_name}</b>".replace(
+        ",", " "
+    )
+
+    payload = {
+        "title": f"{tier_name} · {title[:40]}",
+        "description": description,
+        "payload": json.dumps({"listing_id": listing_id, "tier": tier, "uid": user_id_int}),
+        "provider_token": "",
+        "currency": "XTR",
+        "prices": json.dumps([{"label": tier_name, "amount": amount}]),
+    }
+
+    import urllib.parse
+    data = urllib.parse.urlencode(payload).encode()
+    try:
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/createInvoiceLink",
+            data=data,
+            timeout=15,
+        )
+        with urllib.request.urlopen(req) as resp:
+            result = json.loads(resp.read().decode())
+        if not result.get("ok"):
+            logger.error(f"createInvoiceLink failed: {result}")
+            raise HTTPException(500, f"Telegram API error: {result.get('description')}")
+        invoice_url = result["result"]
+        logger.info(f"Stars invoice created for {listing_id}: {invoice_url[:80]}")
+        return {"ok": True, "invoice_url": invoice_url, "stars_amount": amount, "tier": tier}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"createInvoiceLink exception: {e}")
+        # Fallback: deeplink to bot
+        bot_deeplink = f"https://t.me/Ibaraholka_bot?start=pay_{listing_id}_{tier}"
+        return {"ok": True, "invoice_url": bot_deeplink, "fallback": True, "stars_amount": amount, "tier": tier}
+
+
 # ============================================================
 # ADS / IB COINS — смотри рекламу, получай внутреннюю валюту
 # ============================================================
@@ -6391,7 +6468,7 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789753000 v75: fix _add_column_if_not_exists uses db_cursor() instead of raw psycopg2 connection (psycopg2 has no .execute() method). PRAGMA returns dict rows via _CursorAdapter.
+# deploy-trigger 1789754000 v76: Stars invoice прямо в Mini App (tg.openInvoice). Endpoint POST /payments/stars/invoice — создаёт invoice через createInvoiceLink Bot API (currency=XTR), возвращает invoice_url.
 
 
 # --- deploy-marker-62cfc55: clear-cache signal ---
