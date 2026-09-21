@@ -15,7 +15,7 @@
   try{
     // TDZ-safe haptic stub — inline onclick не падает с ReferenceError
     window.haptic=window.haptic||function(k){try{var tg=window.Telegram&&window.Telegram.WebApp;if(tg&&tg.HapticFeedback){tg.HapticFeedback.impactOccurred(k);return;}if(navigator.vibrate){var ms=k==='heavy'?30:k==='medium'?20:k==='success'?15:10;navigator.vibrate(ms);}}catch(_){}};
-    var v='v85';
+    var v='v86';
     _demoMode = true;
     try{
       window.Telegram?.WebApp?.ready?.();
@@ -257,19 +257,21 @@ async function load(){
     $('sToday').textContent=data.filter(l=>{const c=l.created||0;const cs=c>1e10?Math.floor(c/1000):c;return cs>=todayStart;}).length;
     $('sAvail').textContent=data.filter(l=>l.status!=='sold'&&l.status!=='archived').length;
     $('err').innerHTML='';
-    if(me()){
-      myId=me().id;
+    if(_tg?.initData?.length>10){
+      myId=(_tg.initDataUnsafe?.user?.id)||0;
       try{
         const favs=await apiGet('/favorites');
         if(Array.isArray(favs.favorites)) favSet=new Set(favs.favorites.map(f=>f.id||f.listing_id));
       }catch(_){}
-      // Admin check: если текущий юзер в ADMIN_IDS — показываем ⚙️ кнопку
+      // Admin check (independent of me() — works even if initDataUnsafe is partial)
       try{
         const adm=await apiGet('/admin/ui/me');
         if(adm&&adm.is_admin){
           const ab=document.getElementById('adminBtn');if(ab)ab.style.display='block';
         }
       }catch(_){}
+    }else if(me()){
+      myId=me().id;
     }
     render();
   }catch(e){
