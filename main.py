@@ -46,7 +46,7 @@ from aiogram.types import LabeledPrice, InlineKeyboardMarkup, InlineKeyboardButt
 # Config
 # ============================================================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-import re as _re_webapp
+import re
 # Render hosts Mini App on /mini — same domain as API, no CORS, no CSP/X-Frame-Options.
 # spru.io/v6.html is dead (404) and has CSP frame-ancestors 'none' that breaks WebView.
 _render_default = "https://ibaraholka-bot.onrender.com/mini"
@@ -1875,12 +1875,26 @@ async def mini_app():
         return HTMLResponse(content="<h1>Mini App not deployed</h1>", status_code=404)
     html = p.read_text(encoding="utf-8")
     # sha берём из окружения (выставляется Render при деплое) или из локального git
+    # Берём актуальный sha из RENDER_GIT_COMMIT_SHA, иначе из локального git,
+    # иначе из _MODULE_SHA (sentinel, инкрементируется при редеплое)
     sha = (os.getenv("RENDER_GIT_COMMIT_SHA") or os.getenv("RENDER_GIT_SHA") or os.getenv("GIT_SHA") or "").strip()[:7]
     if not sha:
         try:
             sha = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd="/workspace", stderr=subprocess.DEVNULL).decode().strip()[:7]
         except Exception:
-            sha = "local"
+            pass
+    if not sha:
+        # Render Free без git: используем _MODULE_SHA sentinel (точно меняется при редеплое)
+        try:
+            with open(__file__) as _f:
+                _content = _f.read()
+            m = re.search(r"# deploy-trigger (\d+)", _content)
+            if m:
+                sha = "v" + m.group(1)[-4:]  # последние 4 цифры trigger
+        except Exception:
+            pass
+    if not sha:
+        sha = "local"
     # Подставляем в var v=... и в vmark
     html = html.replace("var v='v__V_SHA__'", f"var v='v{sha}'")
     html = html.replace("v__V_SHA__", sha)
