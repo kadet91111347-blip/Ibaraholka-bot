@@ -1897,7 +1897,7 @@ async def mini_app():
         sha = "local"
     # Подставляем в var v=... и в vmark
     html = html.replace("var v='v__V_SHA__'", f"var v='v{sha}'")
-    html = html.replace("v__V_SHA__", sha)
+    html = html.replace("v__V_SHA__", "v" + sha if not sha.startswith("v") else sha)
     return HTMLResponse(content=html, headers={
         "Cache-Control": "no-cache, no-store, must-revalidate",
         "Pragma": "no-cache",
@@ -7019,7 +7019,7 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789768000 v82: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
+# deploy-trigger 1789769000 v89: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
 
 
 # --- deploy-marker-62cfc55: clear-cache signal ---
