@@ -9,6 +9,7 @@ from __future__ import annotations  # PEP 563: defer all annotations so PEP 585/
     python main.py
 """
 import os
+import subprocess
 import asyncio
 import logging
 # import sqlite3 (now via db_adapter)
@@ -1864,11 +1865,26 @@ MINIAPP_DIR = pathlib.Path(__file__).parent / "miniapp"
 @app.head("/mini/")
 async def mini_app():
     """Отдаёт index.html Mini App. HEAD нужен для Telegram WebView на Android
-    (делает HEAD preflight перед GET — без HEAD-роута получали 405 → '404 Not Found')."""
+    (делает HEAD preflight перед GET — без HEAD-роута получали 405 → '404 Not Found').
+
+    Подставляем актуальный git sha в баннер и в console.log, чтобы при каждом
+    редеплое сразу было видно, что Mini App обновился (Telegram кеширует HTML).
+    """
     p = MINIAPP_DIR / "index.html"
     if not p.exists():
         return HTMLResponse(content="<h1>Mini App not deployed</h1>", status_code=404)
-    return HTMLResponse(content=p.read_text(encoding="utf-8"), headers={
+    html = p.read_text(encoding="utf-8")
+    # sha берём из окружения (выставляется Render при деплое) или из локального git
+    sha = (os.getenv("RENDER_GIT_SHA") or os.getenv("GIT_SHA") or "").strip()[:7]
+    if not sha:
+        try:
+            sha = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd="/workspace", stderr=subprocess.DEVNULL).decode().strip()[:7]
+        except Exception:
+            sha = "local"
+    # Подставляем в var v=... и в vmark
+    html = html.replace("var v='v__V_SHA__'", f"var v='v{sha}'")
+    html = html.replace("v__V_SHA__", sha)
+    return HTMLResponse(content=html, headers={
         "Cache-Control": "no-cache, no-store, must-revalidate",
         "Pragma": "no-cache",
         "Expires": "0",
