@@ -1,0 +1,6 @@
+# Render Cron Job: nightly DB backup
+# Dashboard → New → Cron Job
+# Schedule: "0 3 * * *" (03:00 UTC каждый день)
+# Command: python backup_db.py
+# Service: ibaraholka-bot (link existing)
+# Env vars needed: DATABASE_URL (Neon)

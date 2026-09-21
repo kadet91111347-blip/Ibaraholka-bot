@@ -32,6 +32,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import uvicorn
+import time as _time
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.client.default import DefaultBotProperties
@@ -80,10 +81,9 @@ if not BOT_TOKEN:
     print("⚠️  WARNING: BOT_TOKEN not set. Bot won't start, but API will run.")
     print("   Set BOT_TOKEN in Railway → Variables to enable the bot.")
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-)
+# Structured JSON logs with rotating file (10 MB × 5 backups)
+from observability import setup_logging, METRICS, REPORTER
+setup_logging(level=logging.INFO)
 logger = logging.getLogger("ibaraholka")
 
 # Optional Sentry error tracking — activates only if SENTRY_DSN is set
@@ -1708,6 +1708,46 @@ app.add_middleware(GZipMiddleware, minimum_size=500)
 
 
 # ============================================================
+# SRE middleware: latency metrics + 5xx → Sentry + admin notify
+# ============================================================
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
+
+
+class SreMiddleware(BaseHTTPMiddleware):
+    """Обёртывает каждый запрос: замеряет latency, ловит 5xx, шлёт в Sentry."""
+
+    async def dispatch(self, request: Request, call_next):
+        # Skip noisy paths (polling, docs, metrics)
+        path = request.url.path
+        if path in ("/health", "/metrics", "/openapi.json", "/docs", "/docs/oauth2-redirect"):
+            return await call_next(request)
+
+        t0 = _time.perf_counter()
+        try:
+            response: Response = await call_next(request)
+            ms = (_time.perf_counter() - t0) * 1000
+            METRICS.observe_latency(path, response.status_code, ms)
+            if response.status_code >= 500:
+                # 5xx — usually means a bug. Make a synthetic exception for capture.
+                try:
+                    body = await response.body_iterator.read  # may fail; safe-ignore
+                except Exception:
+                    pass
+                # Decode response body if it's the standard {ok:false,error:..}
+                await REPORTER.report(request, RuntimeError(f"5xx {response.status_code} on {path}"))
+            return response
+        except Exception as exc:
+            ms = (_time.perf_counter() - t0) * 1000
+            METRICS.observe_latency(path, 500, ms)
+            await REPORTER.report(request, exc)
+            raise
+
+
+app.add_middleware(SreMiddleware)
+
+
+# ============================================================
 # Rate limiting (встроенный middleware, без внешних зависимостей)
 # ============================================================
 # Защита от спама и brute-force на sensitive endpoints:
@@ -1979,6 +2019,33 @@ def debug_version():
     except Exception as e:
         info["error"] = str(e)
     return info
+
+
+@app.get("/metrics", include_in_schema=False)
+def metrics_endpoint():
+    """Prometheus-style JSON snapshot. For monitoring tools."""
+    return METRICS.snapshot()
+
+
+@app.get("/logs", include_in_schema=False)
+def logs_endpoint(tail: int = Query(50, ge=1, le=500), level: Optional[str] = Query(None)):
+    """Tail последних N строк JSON-логов. Удобно для дебага с телефона."""
+    log_path = os.path.join(os.getenv("LOG_DIR", "/tmp"), "ibaraholka.json.log")
+    if not os.path.isfile(log_path):
+        return {"error": "no log file", "path": log_path}
+    try:
+        # Читаем последние ~32KB (больше tail может быть медленно)
+        size = os.path.getsize(log_path)
+        chunk = min(size, 32 * 1024)
+        with open(log_path, "rb") as f:
+            f.seek(size - chunk)
+            data = f.read().decode("utf-8", errors="replace")
+        lines = [json.loads(l) for l in data.splitlines() if l.strip()]
+        if level:
+            lines = [l for l in lines if l.get("level") == level.upper()]
+        return {"path": log_path, "tail": tail, "records": lines[-tail:]}
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @app.get("/listings")
@@ -6652,7 +6719,7 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789765000 v82: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
+# deploy-trigger 1789766000 v82: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
 
 
 # --- deploy-marker-62cfc55: clear-cache signal ---
