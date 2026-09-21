@@ -1890,7 +1890,9 @@ async def mini_app():
                 _content = _f.read()
             m = re.search(r"# deploy-trigger (\d+)", _content)
             if m:
-                sha = m.group(1)[-4:]  # последние 4 цифры trigger (без v)
+                # Берём trigger[3:7] чтобы избежать 0000 в конце (когда бамп на +1000)
+                _t = m.group(1)
+                sha = _t[-7:-3] if len(_t) >= 7 else _t
         except Exception:
             pass
     if not sha:
@@ -7019,7 +7021,7 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789770000 v90: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
+# deploy-trigger 1789771000 v91: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
 
 
 # --- deploy-marker-62cfc55: clear-cache signal ---
