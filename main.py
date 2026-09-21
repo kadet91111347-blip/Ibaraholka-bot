@@ -1858,8 +1858,8 @@ def _json_response(*args, **kwargs):
 import pathlib
 MINIAPP_DIR = pathlib.Path(__file__).parent / "miniapp"
 
-@app.get("/mini", response_class=HTMLResponse)
-@app.get("/mini/", response_class=HTMLResponse)
+@app.get("/mini", response_class=HTMLResponse, tags=["miniapp"])
+@app.get("/mini/", response_class=HTMLResponse, tags=["miniapp"])
 @app.head("/mini")
 @app.head("/mini/")
 async def mini_app():
@@ -1874,7 +1874,7 @@ async def mini_app():
         "Expires": "0",
     })
 
-@app.get("/mini/{filename:path}")
+@app.get("/mini/{filename:path}", tags=["miniapp"])
 @app.head("/mini/{filename:path}")
 async def mini_static(filename: str):
     from fastapi.responses import HTMLResponse, FileResponse
@@ -1884,12 +1884,12 @@ async def mini_static(filename: str):
     return FileResponse(p, headers={"Cache-Control": "public, max-age=86400"})
 
 
-@app.get("/")
+@app.get("/", tags=["miniapp"])
 def root():
     return {"app": "АйБарахолка API", "version": "1.0.0", "status": "ok"}
 
 
-@app.get("/health")
+@app.get("/health", tags=["debug"])
 def health():
     """Health check that also keeps the DB connection pool warm.
     Without this, the first request after a quiet period would pay the
@@ -1923,7 +1923,7 @@ def health():
     }
 
 
-@app.get("/debug/logs")
+@app.get("/debug/logs", tags=["debug"])
 def debug_logs():
     """Debug endpoint: show last_post.log if available."""
     try:
@@ -1935,7 +1935,7 @@ def debug_logs():
         return {"ok": False, "error": str(e)}
 
 
-@app.get("/debug/test-auth")
+@app.get("/debug/test-auth", tags=["debug"])
 def debug_test_auth(authorization: str = Header(None)):
     """Debug endpoint: test what get_user returns for given Authorization header."""
     import asyncio
@@ -1979,7 +1979,7 @@ async def _get_user_sync(authorization: str) -> dict:
         return {"error": str(e.detail), "status_code": e.status_code}
 
 
-@app.get("/debug/state")
+@app.get("/debug/state", tags=["debug"])
 def debug_state():
     """Debug endpoint: show env vars + DB state."""
     import os
@@ -2046,7 +2046,7 @@ def debug_state():
     return state
 
 
-@app.get("/debug/version")
+@app.get("/debug/version", tags=["debug"])
 def debug_version():
     """Show which commit is actually deployed (helps detect stale builds)."""
     import os, subprocess
@@ -2076,13 +2076,13 @@ def debug_version():
     return info
 
 
-@app.get("/metrics", include_in_schema=False)
+@app.get("/metrics", include_in_schema=False, tags=["debug"])
 def metrics_endpoint():
     """Prometheus-style JSON snapshot. For monitoring tools."""
     return METRICS.snapshot()
 
 
-@app.get("/logs", include_in_schema=False)
+@app.get("/logs", include_in_schema=False, tags=["debug"])
 def logs_endpoint(tail: int = Query(50, ge=1, le=500), level: Optional[str] = Query(None)):
     """Tail последних N строк JSON-логов. Удобно для дебага с телефона."""
     log_path = os.path.join(os.getenv("LOG_DIR", "/tmp"), "ibaraholka.json.log")
@@ -2103,12 +2103,14 @@ def logs_endpoint(tail: int = Query(50, ge=1, le=500), level: Optional[str] = Qu
         return {"error": str(e)}
 
 
-@app.get("/listings")
+@app.get("/listings", tags=["listings"])
 def list_listings(
+    request: Request,
     cat: Optional[str] = Query(None, pattern="^(iphone|airpods|ipad|mac|watch|accs)$"),
     type: Optional[str] = Query(None, pattern="^(sell|buy|exchange|opt)$"),
     since: Optional[str] = Query(None, pattern="^(1h|24h|7d)$"),
-    limit: int = Query(100, ge=1, le=500),
+    limit: int = Query(100, ge=1, le=200),
+    cursor: Optional[str] = Query(None, description="opaque pagination cursor from X-Next-Cursor"),
 ):
     """Public list of active listings (sorted by tier then recency).
 
@@ -2116,11 +2118,22 @@ def list_listings(
       cat — filter by category
       type — sell/buy/exchange/opt
       since — 1h | 24h | 7d (filter by created timestamp)
-      limit — max results (default 100)
+      limit — max results (default 100, max 200)
+      cursor — opaque base64 cursor for next page (from X-Next-Cursor header)
     """
     now = int(datetime.now().timestamp())
     since_seconds = {"1h": 3600, "24h": 86400, "7d": 7 * 86400}.get(since, 0)
     since_ts = now - since_seconds if since_seconds else None
+
+    # decode cursor if provided
+    cursor_ts = None
+    if cursor:
+        try:
+            import base64 as _b64
+            decoded = json.loads(_b64.urlsafe_b64decode(cursor + "==").decode("utf-8"))
+            cursor_ts = int(decoded.get("created") or 0)
+        except Exception:
+            raise HTTPException(400, "invalid_cursor")
 
     with db_cursor() as conn:
         q = (
@@ -2139,6 +2152,9 @@ def list_listings(
         if since_ts is not None:
             q += " AND created>=?"
             params.append(since_ts)
+        if cursor_ts is not None:
+            q += " AND created<?"
+            params.append(cursor_ts)
         q += (
             " ORDER BY CASE tier WHEN 'vip' THEN 0 WHEN 'premium' THEN 1 ELSE 2 END, "
             "created DESC LIMIT ?"
@@ -2151,18 +2167,33 @@ def list_listings(
         max_created = max((r["created"] or 0) for r in rows) if rows else 0
         etag = f'W/"r{row_count}-m{max_created}-c{cat or "x"}-s{since or "x"}-t{type or "x"}-l{limit}"'
 
-        from fastapi import Response
-        resp = Response(
+        # If-None-Match → 304
+        inm = request.headers.get("if-none-match")
+        from fastapi import Response as _Resp
+        if inm and inm == etag:
+            r304 = _Resp(status_code=304)
+            r304.headers["ETag"] = etag
+            r304.headers["Cache-Control"] = "public, max-age=10"
+            return r304
+
+        resp = _Resp(
             content=json.dumps([dict(r) for r in rows], ensure_ascii=False, default=str),
             media_type="application/json",
         )
         resp.headers["Cache-Control"] = "public, max-age=10"
         resp.headers["ETag"] = etag
         resp.headers["X-Result-Count"] = str(row_count)
+        # Если вернули ровно limit — есть шанс следующей страницы
+        if row_count == limit and rows:
+            import base64 as _b64
+            last = rows[-1]
+            last_created = last["created"] if isinstance(last, dict) else last[-3]
+            nxt = _b64.urlsafe_b64encode(json.dumps({"created": int(last_created)}).encode("utf-8")).decode("utf-8").rstrip("=")
+            resp.headers["X-Next-Cursor"] = nxt
         return resp
 
 
-@app.get("/listings/{listing_id}/status")
+@app.get("/listings/{listing_id}/status", tags=["listings"])
 def listing_status(listing_id: str):
     """Lightweight status endpoint for Mini App to poll after payment.
 
@@ -2187,7 +2218,7 @@ def listing_status(listing_id: str):
     }
 
 
-@app.post("/listings")
+@app.post("/listings", tags=["listings"])
 async def create_listing(item: ListingIn, request: Request):
     """Create new listing. Requires Telegram WebApp Authorization.
 
@@ -2454,7 +2485,7 @@ async def create_listing(item: ListingIn, request: Request):
     }
 
 
-@app.post("/debug/post-channel-test")
+@app.post("/debug/post-channel-test", tags=["debug"])
 async def debug_post_channel_test(request: Request):
     """Debug: try posting a test message to the channel directly."""
     if request.headers.get("x-admin-token", "") != ADMIN_TOKEN:
@@ -2484,7 +2515,7 @@ async def debug_post_channel_test(request: Request):
         return {"ok": False, "error": str(e), "bot_token_set": bool(BOT_TOKEN), "channel_id": CHANNEL_ID}
 
 
-@app.post("/payments/yukassa/create")
+@app.post("/payments/yukassa/create", tags=["payments"])
 async def create_yukassa_payment(request: Request):
     """Create a YooKassa payment for a listing. Returns confirmation_url.
 
@@ -2598,7 +2629,7 @@ async def create_yukassa_payment(request: Request):
         return {"ok": False, "error": str(e)}
 
 
-@app.post("/payments/tinkoff/notify")
+@app.post("/payments/tinkoff/notify", tags=["payments"])
 async def tinkoff_notify(request: Request):
     """User-driven Tinkoff payment confirmation.
 
@@ -2694,7 +2725,7 @@ async def tinkoff_notify(request: Request):
     }
 
 
-@app.post("/payments/activate")
+@app.post("/payments/activate", tags=["payments"])
 async def payments_activate(request: Request):
     """Step 2: user confirms publication after seeing payment deducted.
 
@@ -2789,7 +2820,7 @@ async def payments_activate(request: Request):
     }
 
 
-@app.post("/payments/yukassa/webhook")
+@app.post("/payments/yukassa/webhook", tags=["payments"])
 async def yukassa_webhook(request: Request):
     """YooKassa payment notification. Activates listing when succeeded.
     Configure in YooKassa dashboard: https://yookassa.ru/my/shop/fnsi/notifications
@@ -2899,7 +2930,7 @@ async def _ton_check_tx(to_address: str, amount_nano: int, comment: str, since_t
     return False, None
 
 
-@app.post("/payments/ton/create")
+@app.post("/payments/ton/create", tags=["payments"])
 async def ton_create_payment(request: Request):
     """Create a TON payment intent for a listing.
     Returns: wallet address, amount (TON), unique comment (used as payment reference).
@@ -2968,7 +2999,7 @@ async def ton_create_payment(request: Request):
         return {"ok": False, "error": str(e)}
 
 
-@app.post("/payments/ton/verify")
+@app.post("/payments/ton/verify", tags=["payments"])
 async def ton_verify_payment(request: Request):
     """Verify a TON payment by checking on-chain for the comment + amount.
     Activates listing tier on success.
@@ -3105,7 +3136,7 @@ async def ton_verify_payment(request: Request):
         return {"ok": False, "error": str(e)}
 
 
-@app.get("/payments/ton/wallet")
+@app.get("/payments/ton/wallet", tags=["payments"])
 async def ton_wallet_info():
     """Public info: wallet address + tier prices for the frontend."""
     return {
@@ -3116,7 +3147,7 @@ async def ton_wallet_info():
     }
 
 
-@app.post("/payments/stars/invoice")
+@app.post("/payments/stars/invoice", tags=["payments"])
 async def create_stars_invoice(request: Request, user: Dict = Depends(get_user)):
     """Create a Telegram Stars invoice via createInvoiceLink.
 
@@ -3329,7 +3360,7 @@ def _credit_due_ads(conn, user_id: int, now_sec: int) -> int:
     return total
 
 
-@app.post("/ads/start")
+@app.post("/ads/start", tags=["ads"])
 async def ads_start(request: Request, user: Dict = Depends(get_user)):
     """User started watching an ad. Records a PENDING view (completed=0).
 
@@ -3391,7 +3422,7 @@ async def ads_start(request: Request, user: Dict = Depends(get_user)):
     }
 
 
-@app.get("/ads/next")
+@app.get("/ads/next", tags=["ads"])
 async def ads_next(user: Dict = Depends(get_user)):
     """Return the next ad creative for this user. Anti-fraud: refuses if last view was < 30s ago."""
     try:
@@ -3454,7 +3485,7 @@ async def ads_next(user: Dict = Depends(get_user)):
         }
 
 
-@app.post("/ads/watch-complete")
+@app.post("/ads/watch-complete", tags=["ads"])
 async def ads_watch_complete(request: Request, user: Dict = Depends(get_user)):
     """User finished watching ad (after duration_sec). Credit IB Coins.
 
@@ -3536,7 +3567,7 @@ async def ads_watch_complete(request: Request, user: Dict = Depends(get_user)):
         }
 
 
-@app.post("/ads/click")
+@app.post("/ads/click", tags=["ads"])
 async def ads_click(request: Request, user: Dict = Depends(get_user)):
     """Track that user clicked the ad (analytics only, no reward)."""
     try:
@@ -3552,7 +3583,7 @@ async def ads_click(request: Request, user: Dict = Depends(get_user)):
     return {"ok": True}
 
 
-@app.get("/user/balance")
+@app.get("/user/balance", tags=["profile"])
 async def user_balance(user: Dict = Depends(get_user)):
     """Return current IB Coins balance + lifetime totals."""
     user_id = int(user["id"])
@@ -3580,7 +3611,7 @@ async def user_balance(user: Dict = Depends(get_user)):
     return {"ok": True, "coins": 0, "total_earned": 0, "total_spent": 0, "updated": 0, "credited_now": credited_now}
 
 
-@app.post("/payments/coins/pay")
+@app.post("/payments/coins/pay", tags=["payments"])
 async def payments_coins_pay(request: Request, user: Dict = Depends(get_user)):
     """Pay for a listing with IB Coins.
 
@@ -3846,7 +3877,7 @@ def _deal_settle_release(conn, deal_row) -> Dict[str, Any]:
     return {"status": "released", "payout_tx_hash": payout_tx}
 
 
-@app.post("/deals/create")
+@app.post("/deals/create", tags=["deals"])
 async def deals_create(request: Request, user: Dict = Depends(get_user)):
     """Buyer initiates a deal: creates awaiting_payment row + returns payment details.
 
@@ -3996,7 +4027,7 @@ async def deals_create(request: Request, user: Dict = Depends(get_user)):
     return out
 
 
-@app.post("/deals/{deal_id}/ship")
+@app.post("/deals/{deal_id}/ship", tags=["deals"])
 async def deals_ship(deal_id: str, request: Request, user: Dict = Depends(get_user)):
     """Seller marks deal as shipped. Sets tracking, status=shipped, shipped_at=now."""
     user_id = int(user["id"])
@@ -4042,7 +4073,7 @@ async def deals_ship(deal_id: str, request: Request, user: Dict = Depends(get_us
     return {"ok": True, "deal_id": deal_id, "status": "shipped", "tracking": tracking}
 
 
-@app.post("/deals/{deal_id}/confirm")
+@app.post("/deals/{deal_id}/confirm", tags=["deals"])
 async def deals_confirm(deal_id: str, user: Dict = Depends(get_user)):
     """Buyer confirms receipt → release funds to seller."""
     user_id = int(user["id"])
@@ -4076,7 +4107,7 @@ async def deals_confirm(deal_id: str, user: Dict = Depends(get_user)):
     return {"ok": True, "deal_id": deal_id, **result}
 
 
-@app.post("/deals/{deal_id}/dispute")
+@app.post("/deals/{deal_id}/dispute", tags=["deals"])
 async def deals_dispute(deal_id: str, request: Request, user: Dict = Depends(get_user)):
     """Buyer or seller opens a dispute. Notifies admin."""
     user_id = int(user["id"])
@@ -4122,7 +4153,7 @@ async def deals_dispute(deal_id: str, request: Request, user: Dict = Depends(get
     return {"ok": True, "deal_id": deal_id, "status": "disputed"}
 
 
-@app.post("/deals/{deal_id}/cancel")
+@app.post("/deals/{deal_id}/cancel", tags=["deals"])
 async def deals_cancel(deal_id: str, user: Dict = Depends(get_user)):
     """Cancel deal before payment (awaiting_payment status)."""
     user_id = int(user["id"])
@@ -4141,7 +4172,7 @@ async def deals_cancel(deal_id: str, user: Dict = Depends(get_user)):
     return {"ok": True, "deal_id": deal_id, "status": "cancelled"}
 
 
-@app.post("/deals/{deal_id}/messages")
+@app.post("/deals/{deal_id}/messages", tags=["deals"])
 async def deals_post_message(deal_id: str, request: Request, user: Dict = Depends(get_user)):
     """Post a message in the deal's chat (buyer ↔ seller)."""
     user_id = int(user["id"])
@@ -4171,7 +4202,7 @@ async def deals_post_message(deal_id: str, request: Request, user: Dict = Depend
     return {"ok": True, "deal_id": deal_id}
 
 
-@app.get("/deals/{deal_id}/messages")
+@app.get("/deals/{deal_id}/messages", tags=["deals"])
 async def deals_get_messages(deal_id: str, user: Dict = Depends(get_user)):
     """Get chat messages for a deal (buyer or seller)."""
     user_id = int(user["id"])
@@ -4201,7 +4232,7 @@ async def deals_get_messages(deal_id: str, user: Dict = Depends(get_user)):
     return {"ok": True, "deal_id": deal_id, "messages": out}
 
 
-@app.get("/deals/{deal_id}")
+@app.get("/deals/{deal_id}", tags=["deals"])
 async def deals_get(deal_id: str, user: Dict = Depends(get_user)):
     """Get deal details. Buyer, seller, or admin can view."""
     user_id = int(user["id"])
@@ -4216,7 +4247,7 @@ async def deals_get(deal_id: str, user: Dict = Depends(get_user)):
     return {"ok": True, "deal": d}
 
 
-@app.get("/deals")
+@app.get("/deals", tags=["deals"])
 async def deals_list(request: Request, user: Dict = Depends(get_user)):
     """List deals for current user. ?role=buyer|seller (default both)."""
     user_id = int(user["id"])
@@ -4241,7 +4272,7 @@ async def deals_list(request: Request, user: Dict = Depends(get_user)):
     return {"ok": True, "deals": [_deal_row_to_dict(r) for r in rows]}
 
 
-@app.post("/payouts/request")
+@app.post("/payouts/request", tags=["deals"])
 async def payouts_request(request: Request, user: Dict = Depends(get_user)):
     """Seller requests payout of balance."""
     try:
@@ -4635,7 +4666,7 @@ async def _push_match(user_id: int, sub_id: str, listing_id: str, listing: Dict[
 
 
 
-@app.post("/match/subscribe")
+@app.post("/match/subscribe", tags=["match"])
 async def match_subscribe(request: Request, user: Dict = Depends(get_user)):
     """Create a new match subscription.
 
@@ -4735,7 +4766,7 @@ async def match_subscribe(request: Request, user: Dict = Depends(get_user)):
             "is_free": is_free, "message": "Подписка создана — буду присылать подходящие объявления"}
 
 
-@app.get("/match/subscriptions")
+@app.get("/match/subscriptions", tags=["match"])
 async def match_list(user: Dict = Depends(get_user)):
     """List current user's match subscriptions."""
     user_id = int(user["id"])
@@ -4756,7 +4787,7 @@ async def match_list(user: Dict = Depends(get_user)):
         return {"ok": False, "error": str(e)}
 
 
-@app.delete("/match/subscriptions/{sub_id}")
+@app.delete("/match/subscriptions/{sub_id}", tags=["match"])
 async def match_unsubscribe(sub_id: str, user: Dict = Depends(get_user)):
     """Deactivate a subscription (soft-delete)."""
     user_id = int(user["id"])
@@ -4902,7 +4933,7 @@ def _check_and_grant_milestones(conn, referrer_id: int):
     return granted
 
 
-@app.post("/referrals/track")
+@app.post("/referrals/track", tags=["profile"])
 async def referrals_track(request: Request):
     """Mini App calls this on first launch to register a referral.
 
@@ -4975,7 +5006,7 @@ async def referrals_track(request: Request):
         return {"ok": False, "error": str(e)}
 
 
-@app.get("/referrals/stats")
+@app.get("/referrals/stats", tags=["profile"])
 async def referrals_stats(user: Dict = Depends(get_user)):
     """Get referral stats for current user."""
     user_id = int(user["id"])
@@ -5034,7 +5065,7 @@ async def referrals_stats(user: Dict = Depends(get_user)):
         return {"ok": False, "error": str(e)}
 
 
-@app.post("/referrals/claim")
+@app.post("/referrals/claim", tags=["profile"])
 async def referrals_claim(request: Request, user: Dict = Depends(get_user)):
     """Manually claim any pending milestones. Normally auto-claimed on each /track."""
     user_id = int(user["id"])
@@ -5088,7 +5119,7 @@ async def cmd_refs(message: types.Message):
 # ============================================================
 
 
-@app.get("/seller/balance")
+@app.get("/seller/balance", tags=["profile"])
 async def seller_balance_get(user: Dict = Depends(get_user)):
     """Get current seller's balance (RUB + TON)."""
     user_id = int(user["id"])
@@ -5110,7 +5141,7 @@ async def seller_balance_get(user: Dict = Depends(get_user)):
     return {"ok": True, "rub_kopeyki": rub, "rub": rub / 100, "ton_nano": ton, "ton": ton / TON_NANOTON}
 
 
-@app.post("/admin/deals/{deal_id}/resolve")
+@app.post("/admin/deals/{deal_id}/resolve", tags=["admin"])
 async def admin_deals_resolve(deal_id: str, request: Request, x_admin_token: str = Header(None, alias="x-admin-token")):
     """Admin resolves a disputed deal: released (seller wins) or refunded (buyer wins)."""
     if x_admin_token != ADMIN_TOKEN:
@@ -5163,7 +5194,7 @@ async def admin_deals_resolve(deal_id: str, request: Request, x_admin_token: str
     return {"ok": True, "deal_id": deal_id, **result}
 
 
-@app.get("/admin/deals")
+@app.get("/admin/deals", tags=["admin"])
 async def admin_deals_list(request: Request, status: str = "disputed",
                             x_admin_token: str = Header(None, alias="x-admin-token")):
     """Admin: list deals (optionally filter by status)."""
@@ -5182,7 +5213,7 @@ async def admin_deals_list(request: Request, status: str = "disputed",
     return {"ok": True, "deals": [_deal_row_to_dict(r) for r in rows]}
 
 
-@app.get("/admin/payouts")
+@app.get("/admin/payouts", tags=["admin"])
 async def admin_payouts_list(x_admin_token: str = Header(None, alias="x-admin-token"),
                               status: str = "pending"):
     """Admin: list payout requests."""
@@ -5212,7 +5243,7 @@ async def admin_payouts_list(x_admin_token: str = Header(None, alias="x-admin-to
     return {"ok": True, "payouts": out}
 
 
-@app.post("/admin/payouts/{payout_id}/complete")
+@app.post("/admin/payouts/{payout_id}/complete", tags=["admin"])
 async def admin_payouts_complete(payout_id: str, request: Request,
                                   x_admin_token: str = Header(None, alias="x-admin-token")):
     """Admin marks payout as completed and attaches tx_hash / external transfer ref."""
@@ -5266,7 +5297,7 @@ def _row_to_dict(r, cols):
     return dict(zip(cols, r))
 
 
-@app.get("/favorites")
+@app.get("/favorites", tags=["favorites"])
 async def favorites_list(user: Dict[str, Any] = Depends(get_user)):
     """Список избранных объявлений пользователя."""
     uid = int(user["id"])
@@ -5277,7 +5308,7 @@ async def favorites_list(user: Dict[str, Any] = Depends(get_user)):
     return {"ok": True, "favorites": items, "count": len(items)}
 
 
-@app.post("/favorites/{listing_id}")
+@app.post("/favorites/{listing_id}", tags=["favorites"])
 async def favorites_add(listing_id: str, user: Dict[str, Any] = Depends(get_user)):
     """Добавить объявление в избранное."""
     uid = int(user["id"])
@@ -5293,7 +5324,7 @@ async def favorites_add(listing_id: str, user: Dict[str, Any] = Depends(get_user
     return {"ok": True, "listing_id": listing_id}
 
 
-@app.delete("/favorites/{listing_id}")
+@app.delete("/favorites/{listing_id}", tags=["favorites"])
 async def favorites_remove(listing_id: str, user: Dict[str, Any] = Depends(get_user)):
     """Удалить объявление из избранного."""
     uid = int(user["id"])
@@ -5305,7 +5336,7 @@ async def favorites_remove(listing_id: str, user: Dict[str, Any] = Depends(get_u
 # ============================================================
 # REVIEWS — Отзывы на продавца
 # ============================================================
-@app.post("/reviews")
+@app.post("/reviews", tags=["profile"])
 async def reviews_create(request: Request, user: Dict[str, Any] = Depends(get_user)):
     """Оставить отзыв на продавца. Требуется завершённая сделка."""
     body = await request.json()
@@ -5343,7 +5374,7 @@ async def reviews_create(request: Request, user: Dict[str, Any] = Depends(get_us
     return {"ok": True, "deal_id": deal_id, "rating": int(rating)}
 
 
-@app.get("/users/{user_id}/reviews")
+@app.get("/users/{user_id}/reviews", tags=["profile"])
 async def user_reviews(user_id: int):
     """Все отзывы на продавца + средний рейтинг."""
     cols = ["id", "deal_id", "buyer_id", "rating", "text", "created"]
@@ -5357,7 +5388,7 @@ async def user_reviews(user_id: int):
 # ============================================================
 # LISTING VIEWS — Просмотры + "X человек смотрят"
 # ============================================================
-@app.post("/listings/{listing_id}/view")
+@app.post("/listings/{listing_id}/view", tags=["listings"])
 async def listing_view(listing_id: str, user: Dict[str, Any] = Depends(get_user)):
     """Засчитать просмотр объявления (для FOMO-счётчика)."""
     uid = int(user["id"])
@@ -5391,7 +5422,7 @@ async def listing_view(listing_id: str, user: Dict[str, Any] = Depends(get_user)
     return {"ok": True, "listing_id": listing_id, "watching_now": display, "real_watchers": n}
 
 
-@app.get("/listings/{listing_id}/stats")
+@app.get("/listings/{listing_id}/stats", tags=["listings"])
 async def listing_stats(listing_id: str):
     """Статистика объявления для продавца: просмотры за 24ч/7д/всего."""
     now = int(time.time())
@@ -5411,7 +5442,7 @@ async def listing_stats(listing_id: str):
 # ============================================================
 # SEARCH — Полнотекстовый поиск объявлений
 # ============================================================
-@app.get("/search")
+@app.get("/search", tags=["listings"])
 async def search(q: str = "", cat: str = "", city: str = "", max_price: int = 0, limit: int = 50):
     """Поиск объявлений. q ищет по title+description (case-insensitive LIKE)."""
     limit = min(max(limit, 1), 100)
@@ -5445,7 +5476,7 @@ async def search(q: str = "", cat: str = "", city: str = "", max_price: int = 0,
 # ============================================================
 # SAVED FILTERS — Сохранённые фильтры
 # ============================================================
-@app.post("/saved-filters")
+@app.post("/saved-filters", tags=["listings"])
 async def saved_filters_save(request: Request, user: Dict[str, Any] = Depends(get_user)):
     """Сохранить набор фильтров под именем."""
     body = await request.json()
@@ -5466,7 +5497,7 @@ async def saved_filters_save(request: Request, user: Dict[str, Any] = Depends(ge
     return {"ok": True, "name": name}
 
 
-@app.get("/saved-filters")
+@app.get("/saved-filters", tags=["listings"])
 async def saved_filters_list(user: Dict[str, Any] = Depends(get_user)):
     """Список сохранённых фильтров пользователя."""
     uid = int(user["id"])
@@ -5476,7 +5507,7 @@ async def saved_filters_list(user: Dict[str, Any] = Depends(get_user)):
     return {"ok": True, "filters": items}
 
 
-@app.delete("/saved-filters/{filter_id}")
+@app.delete("/saved-filters/{filter_id}", tags=["listings"])
 async def saved_filters_delete(filter_id: int, user: Dict[str, Any] = Depends(get_user)):
     """Удалить сохранённый фильтр."""
     uid = int(user["id"])
@@ -5488,7 +5519,7 @@ async def saved_filters_delete(filter_id: int, user: Dict[str, Any] = Depends(ge
 # ============================================================
 # PROFILE — Мой профиль (всё обо мне)
 # ============================================================
-@app.get("/profile/me")
+@app.get("/profile/me", tags=["profile"])
 async def profile_me(user: Dict[str, Any] = Depends(get_user)):
     """Профиль текущего юзера: мои объявления, баланс, подписки, сделки, реф-стата."""
     uid = int(user["id"])
@@ -5647,7 +5678,7 @@ async def _start_background():
     asyncio.create_task(_background_scheduler())
 
 
-@app.get("/admin/ads")
+@app.get("/admin/ads", tags=["admin"])
 async def admin_ads(request: Request, x_admin_token: str = Header(None, alias="x-admin-token")):
     """Admin: list all ad creatives + view stats."""
     if x_admin_token != ADMIN_TOKEN:
@@ -5692,7 +5723,7 @@ async def admin_ads(request: Request, x_admin_token: str = Header(None, alias="x
     }
 
 
-@app.post("/debug/create-vip-test")
+@app.post("/debug/create-vip-test", tags=["debug"])
 async def debug_create_vip_test(request: Request):
     """Debug: create VIP listing for Sasha (real user) for testing invoice flow."""
     if request.headers.get("x-admin-token", "") != ADMIN_TOKEN:
@@ -5746,7 +5777,7 @@ async def debug_create_vip_test(request: Request):
         return {"listing_id": listing_id, "error": str(e)}
 
 
-@app.delete("/listings/{listing_id}")
+@app.delete("/listings/{listing_id}", tags=["listings"])
 async def delete_listing(listing_id: str, request: Request):
     """Delete your own listing, or any listing if admin token provided.
 
@@ -5785,7 +5816,7 @@ async def delete_listing(listing_id: str, request: Request):
     return {"ok": True, "channel_deleted": deleted_from_channel}
 
 
-@app.post("/admin/wipe-all-listings")
+@app.post("/admin/wipe-all-listings", tags=["admin"])
 async def admin_wipe_all_listings(request: Request):
     """One-shot listing cleanup. Accepts admin-token OR wipe-secret derived from BOT_TOKEN.
 
@@ -5842,7 +5873,7 @@ ALLOWED_REPORT_REASONS = {
 }
 
 
-@app.post("/reports/{listing_id}")
+@app.post("/reports/{listing_id}", tags=["reports"])
 async def reports_create(listing_id: str, request: Request, user: Dict = Depends(get_user)):
     """Пожаловаться на объявление. Один пользователь — одна жалоба на листинг."""
     try:
@@ -5897,7 +5928,7 @@ async def reports_create(listing_id: str, request: Request, user: Dict = Depends
         return {"ok": False, "error": str(e)[:200]}
 
 
-@app.get("/admin/reports")
+@app.get("/admin/reports", tags=["admin"])
 async def admin_reports(status: str = "pending", limit: int = 100, authorization: str = Header(None)):
     """Список жалоб для админа. Фильтр по статусу: pending|reviewed|dismissed|action_taken."""
     if authorization != f"tma {ADMIN_TOKEN}" and authorization != ADMIN_TOKEN:
@@ -5916,7 +5947,7 @@ async def admin_reports(status: str = "pending", limit: int = 100, authorization
     return {"ok": True, "status": status, "count": len(out), "reports": out}
 
 
-@app.post("/admin/reports/{report_id}/resolve")
+@app.post("/admin/reports/{report_id}/resolve", tags=["admin"])
 async def admin_resolve_report(report_id: int, request: Request, authorization: str = Header(None)):
     """Пометить жалобу как обработанную.
 
@@ -5971,7 +6002,7 @@ async def admin_resolve_report(report_id: int, request: Request, authorization: 
     }
 
 
-@app.post("/listings/{listing_id}/confirm-paid")
+@app.post("/listings/{listing_id}/confirm-paid", tags=["listings"])
 async def confirm_paid_http(listing_id: str, request: Request):
     """HTTP counterpart of the Telegram `confirm_paid:` callback.
 
@@ -6046,7 +6077,7 @@ async def confirm_paid_http(listing_id: str, request: Request):
     }
 
 
-@app.post("/listings/{listing_id}/cancel-payment")
+@app.post("/listings/{listing_id}/cancel-payment", tags=["listings"])
 async def cancel_payment_http(listing_id: str, request: Request):
     """User cancelled the payment (closed WebApp without paying).
 
@@ -6103,7 +6134,7 @@ async def cancel_payment_http(listing_id: str, request: Request):
     }
 
 
-@app.get("/admin/listings")
+@app.get("/admin/listings", tags=["admin"])
 async def admin_listings(admin_token: str = ""):
     """Admin: list all listings. Pass ?admin_token=demo."""
     if admin_token != ADMIN_TOKEN:
@@ -6117,7 +6148,7 @@ async def admin_listings(admin_token: str = ""):
         return [dict(r) for r in rows]
 
 
-@app.post("/admin/listings/batch")
+@app.post("/admin/listings/batch", tags=["admin"])
 async def admin_listings_batch(request: Request, admin_token: str = ""):
     """Admin: пакетная модерация листингов.
 
@@ -6173,7 +6204,7 @@ async def admin_listings_batch(request: Request, admin_token: str = ""):
     return {"ok": True, "action": action, "success": success, "failed": failed, "ok_count": len(success), "fail_count": len(failed)}
 
 
-@app.get("/admin/export")
+@app.get("/admin/export", tags=["admin"])
 async def admin_export(table: str = "listings", fmt: str = "csv", admin_token: str = ""):
     """Admin: экспорт таблицы в CSV.
 
@@ -6237,7 +6268,7 @@ async def admin_export(table: str = "listings", fmt: str = "csv", admin_token: s
     )
 
 
-@app.post("/admin/payments/{payment_id}/refund")
+@app.post("/admin/payments/{payment_id}/refund", tags=["admin"])
 async def admin_refund_payment(payment_id: int, request: Request, admin_token: str = ""):
     """Admin: пометить платёж как refunded (для ручного возврата через банк).
 
@@ -6283,7 +6314,7 @@ async def admin_refund_payment(payment_id: int, request: Request, admin_token: s
     return {"ok": True, "payment_id": payment_id, "listing_id": listing_id, "user_id": user_id, "status": "refunded"}
 
 
-@app.get("/admin/ui/me")
+@app.get("/admin/ui/me", tags=["admin"])
 async def admin_ui_me(request: Request):
     """Check whether the current Telegram user is an admin (via ADMIN_IDS).
     Used by Mini App to render the admin panel automatically.
@@ -6301,7 +6332,7 @@ async def admin_ui_me(request: Request):
     }
 
 
-@app.get("/admin/ui/stats")
+@app.get("/admin/ui/stats", tags=["admin"])
 async def admin_ui_stats(request: Request):
     """Admin dashboard stats: counts, revenue, recent activity.
     Auth by Telegram user.id in ADMIN_IDS (no x-admin-token needed in Mini App).
@@ -6353,7 +6384,7 @@ async def admin_ui_stats(request: Request):
     }
 
 
-@app.post("/admin/demo-mode")
+@app.post("/admin/demo-mode", tags=["admin"])
 async def admin_toggle_demo(payload: dict, admin_token: str = ""):
     """Toggle DEMO_MODE at runtime without redeploying.
     Body: {"enabled": true|false|null} — null = reset to env var default
@@ -6379,7 +6410,7 @@ async def admin_toggle_demo(payload: dict, admin_token: str = ""):
     }
 
 
-@app.get("/admin/demo-mode")
+@app.get("/admin/demo-mode", tags=["admin"])
 async def admin_get_demo_state(admin_token: str = ""):
     """Current DEMO state: env + runtime override + effective."""
     if admin_token != ADMIN_TOKEN:
@@ -6391,7 +6422,7 @@ async def admin_get_demo_state(admin_token: str = ""):
     }
 
 
-@app.post("/debug/toggle-demo")
+@app.post("/debug/toggle-demo", tags=["debug"])
 async def debug_toggle_demo(enabled: str = ""):
     """Temporary no-auth toggle for testing. Pass ?enabled=true|false|null.
     WARNING: no auth — anyone with the URL can toggle. For admin /admin/demo-mode.
@@ -6413,7 +6444,7 @@ async def debug_toggle_demo(enabled: str = ""):
     }
 
 
-@app.get("/admin/stats")
+@app.get("/admin/stats", tags=["admin"])
 async def admin_stats(admin_token: str = ""):
     """Admin dashboard: revenue, listings by tier/day, top sellers."""
     if admin_token != ADMIN_TOKEN:
@@ -6503,7 +6534,7 @@ async def admin_stats(admin_token: str = ""):
         }
 
 
-@app.get("/admin/autopost")
+@app.get("/admin/autopost", tags=["admin"])
 async def admin_autopost(request: Request, listing_id: str = "", tier: str = ""):
     """Autopost: pick the next active listing and publish it to channel.
 
@@ -6587,7 +6618,7 @@ async def admin_autopost(request: Request, listing_id: str = "", tier: str = "")
         return {"ok": False, "posted": False, "listing_id": item_id, "error": str(e)}
 
 
-@app.post("/admin/post-channel")
+@app.post("/admin/post-channel", tags=["admin"])
 async def admin_post_channel(request: Request):
     """Admin: post a listing to channel manually."""
     admin_token = request.headers.get("x-admin-token", "")
@@ -6626,7 +6657,7 @@ async def admin_post_channel(request: Request):
         return {"ok": False, "error": str(e)}
 
 
-@app.post("/admin/purge-unpaid-channel-posts")
+@app.post("/admin/purge-unpaid-channel-posts", tags=["admin"])
 async def purge_unpaid_channel_posts(request: Request):
     """Admin: delete channel posts for paid-tier listings whose payment never completed.
 
@@ -6668,7 +6699,7 @@ async def purge_unpaid_channel_posts(request: Request):
     return {"ok": True, "purged": purged, "failed": failed}
 
 
-@app.post("/admin/recheck-channel-post")
+@app.post("/admin/recheck-channel-post", tags=["admin"])
 async def recheck_channel_post(request: Request):
     """Admin: verify a listing's current payment gate result without reposting."""
     admin_token = request.headers.get("x-admin-token", "")
@@ -6697,7 +6728,7 @@ async def recheck_channel_post(request: Request):
     }
 
 
-@app.post("/admin/listings/{listing_id}/approve")
+@app.post("/admin/listings/{listing_id}/approve", tags=["admin"])
 async def approve_listing(listing_id: str, request: Request):
     """Admin: approve a pending listing. Requires ADMIN_IDS set."""
     if not ADMIN_IDS:
@@ -6711,7 +6742,7 @@ async def approve_listing(listing_id: str, request: Request):
     return {"ok": True}
 
 
-@app.post("/admin/listings/{listing_id}/reject")
+@app.post("/admin/listings/{listing_id}/reject", tags=["admin"])
 async def reject_listing(listing_id: str, request: Request):
     """Admin: reject an auto-activated listing (e.g. Tinkoff payment didn't arrive).
 
@@ -6787,7 +6818,7 @@ async def main():
 
 
 
-@app.post("/debug/migrate")
+@app.post("/debug/migrate", tags=["debug"])
 def run_migration(source_db: str = "ibaraholka.db", body: dict = None):
     """One-shot: copy rows from local sqlite to postgres.
 
@@ -6829,7 +6860,7 @@ def run_migration(source_db: str = "ibaraholka.db", body: dict = None):
         return {"ok": False, "error": str(e)[:500], "log": buf.getvalue()}
 
 
-@app.get("/debug/test-pg")
+@app.get("/debug/test-pg", tags=["debug"])
 def test_postgres():
     """Test direct PostgreSQL connection."""
     import os
@@ -6919,7 +6950,7 @@ async def telegram_webhook(request: Request):
         return {"ok": False, "error": str(e)}
 
 
-@app.post("/debug/setup-webhook")
+@app.post("/debug/setup-webhook", tags=["debug"])
 async def setup_webhook(request: Request):
     """
     One-time setup: register Telegram webhook URL with Telegram Bot API.
@@ -6958,10 +6989,10 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789767000 v82: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
+# deploy-trigger 1789768000 v82: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
 
 
 # --- deploy-marker-62cfc55: clear-cache signal ---
-@app.get("/__deploy_marker__")
+@app.get("/__deploy_marker__", tags=["debug"])
 def _deploy_marker():
     return {"deployed": "62cfc55", "time": int(time.time())}
