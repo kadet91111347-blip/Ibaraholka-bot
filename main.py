@@ -1875,7 +1875,7 @@ async def mini_app():
         return HTMLResponse(content="<h1>Mini App not deployed</h1>", status_code=404)
     html = p.read_text(encoding="utf-8")
     # sha берём из окружения (выставляется Render при деплое) или из локального git
-    sha = (os.getenv("RENDER_GIT_SHA") or os.getenv("GIT_SHA") or "").strip()[:7]
+    sha = (os.getenv("RENDER_GIT_COMMIT_SHA") or os.getenv("RENDER_GIT_SHA") or os.getenv("GIT_SHA") or "").strip()[:7]
     if not sha:
         try:
             sha = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd="/workspace", stderr=subprocess.DEVNULL).decode().strip()[:7]
