@@ -76,6 +76,61 @@ def _is_demo_enabled() -> bool:
         return _DEMO_RUNTIME
     return DEMO_MODE
 
+
+async def notify_admins(text: str, reply_markup=None) -> int:
+    """Шлёт сообщение всем ADMIN_IDS через Telegram.
+
+    Возвращает количество успешно доставленных. Не падает если нет bot.
+    """
+    if not bot or not ADMIN_IDS:
+        return 0
+    delivered = 0
+    for uid in ADMIN_IDS:
+        try:
+            await bot.send_message(uid, text, reply_markup=reply_markup)
+            delivered += 1
+        except Exception as e:
+            logger.warning(f"notify_admins failed for {uid}: {e}")
+    return delivered
+
+
+async def _notify_new_report(rid: int, listing_id: str, reporter_id: int, reason: str, comment: str) -> None:
+    """Уведомление админу о новой жалобе (с inline-кнопками)."""
+    icons = {"spam": "🚫", "fraud": "💸", "duplicate": "📑", "wrong_category": "🗂", "prohibited": "⛔", "other": "❓"}
+    icon = icons.get(reason, "🚩")
+    txt = (
+        f"{icon} <b>Новая жалоба #{rid}</b>\n\n"
+        f"<b>Листинг:</b> <code>{listing_id}</code>\n"
+        f"<b>Причина:</b> {reason}\n"
+        f"<b>Жалобщик:</b> <code>{reporter_id}</code>"
+    )
+    if comment:
+        txt += f"\n<b>Комментарий:</b> {comment[:200]}"
+    # Inline-кнопки для модерации
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🗑 Удалить листинг", callback_data=f"rep_del:{rid}"),
+            InlineKeyboardButton(text="✅ Dismiss", callback_data=f"rep_dismiss:{rid}"),
+        ],
+    ])
+    await notify_admins(txt, reply_markup=kb)
+
+
+async def _notify_new_listing(listing_id: str, tier: str, user: dict, title: str, price: int, cat: str) -> None:
+    """Уведомление админу о новом листинге (только paid tiers)."""
+    if tier not in ("premium", "vip"):
+        return
+    price_str = f"{price:,}".replace(",", " ")
+    uname = user.get("username") or f"id{user.get('id')}"
+    txt = (
+        f"📥 <b>Новое объявление</b> ({tier.upper()})\n\n"
+        f"<b>{title}</b> — {price_str} ₽\n"
+        f"📍 Категория: <code>{cat}</code>\n"
+        f"👤 <a href=\"tg://user?id={user.get('id')}\">{uname}</a>\n"
+        f"<code>{listing_id}</code>"
+    )
+    await notify_admins(txt)
+
 # Don't crash if BOT_TOKEN missing — start API anyway, log warning
 if not BOT_TOKEN:
     print("⚠️  WARNING: BOT_TOKEN not set. Bot won't start, but API will run.")
@@ -2209,6 +2264,15 @@ async def create_listing(item: ListingIn, request: Request):
         f"Listing {listing_id} created: user={user['id']} tier={item.tier} "
         f"status={initial_status} demo={is_demo_user}"
     )
+
+    # Уведомление админу о новом paid-объявлении (после публикации/оплаты)
+    try:
+        asyncio.create_task(_notify_new_listing(
+            listing_id=listing_id, tier=item.tier, user=user,
+            title=item.title or "", price=int(item.price or 0), cat=item.cat,
+        ))
+    except Exception:
+        pass
 
     # Posting to channel happens inside the invoice block above
     # (so demo users get channel posts without invoice, real users get channel post after payment)
@@ -5816,6 +5880,15 @@ async def reports_create(listing_id: str, request: Request, user: Dict = Depends
                 (rid, listing_id, reporter_id, reason, comment or None, now),
             )
             conn.commit()
+
+        # Notify admins about the new report (best-effort)
+        try:
+            asyncio.create_task(_notify_new_report(
+                rid=rid, listing_id=listing_id, reporter_id=reporter_id,
+                reason=reason, comment=comment,
+            ))
+        except Exception:
+            pass
         return {"ok": True, "report_id": rid, "listing_id": listing_id, "reason": reason}
     except HTTPException:
         raise
@@ -6042,6 +6115,172 @@ async def admin_listings(admin_token: str = ""):
             "FROM listings ORDER BY created DESC"
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+@app.post("/admin/listings/batch")
+async def admin_listings_batch(request: Request, admin_token: str = ""):
+    """Admin: пакетная модерация листингов.
+
+    Body: {"action": "approve"|"reject"|"delete", "ids": ["l_1", "l_2", ...]}
+    Возвращает сколько обработано успешно, сколько нет.
+    """
+    if admin_token != ADMIN_TOKEN:
+        raise HTTPException(403, "Admin token required")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    action = (body.get("action") or "").strip()
+    ids = body.get("ids") or []
+    if action not in ("approve", "reject", "delete"):
+        return {"ok": False, "error": "action must be approve|reject|delete"}
+    if not isinstance(ids, list) or not ids:
+        return {"ok": False, "error": "ids must be a non-empty list"}
+    ids = [str(x) for x in ids[:200]]  # лимит 200 за один вызов
+
+    success = []
+    failed = []
+    with db_cursor() as conn:
+        for lid in ids:
+            try:
+                row = conn.execute("SELECT status, channel_message_id FROM listings WHERE id=?", (lid,)).fetchone()
+                if not row:
+                    failed.append({"id": lid, "reason": "not_found"})
+                    continue
+                status = row["status"] if isinstance(row, dict) else row[0]
+                ch_msg_id = row["channel_message_id"] if isinstance(row, dict) else row[1]
+                if action == "approve":
+                    if status != "awaiting_payment":
+                        failed.append({"id": lid, "reason": f"status={status}, can't approve"})
+                        continue
+                    conn.execute("UPDATE listings SET status='active' WHERE id=?", (lid,))
+                elif action == "reject":
+                    if status != "awaiting_payment":
+                        failed.append({"id": lid, "reason": f"status={status}, can't reject"})
+                        continue
+                    conn.execute("UPDATE listings SET status='rejected' WHERE id=?", (lid,))
+                elif action == "delete":
+                    if ch_msg_id:
+                        try:
+                            await delete_from_channel(ch_msg_id)
+                        except Exception:
+                            pass
+                    conn.execute("DELETE FROM listings WHERE id=?", (lid,))
+                success.append(lid)
+            except Exception as e:
+                failed.append({"id": lid, "reason": str(e)[:80]})
+        conn.commit()
+    return {"ok": True, "action": action, "success": success, "failed": failed, "ok_count": len(success), "fail_count": len(failed)}
+
+
+@app.get("/admin/export")
+async def admin_export(table: str = "listings", fmt: str = "csv", admin_token: str = ""):
+    """Admin: экспорт таблицы в CSV.
+
+    table ∈ {listings, payments, users, reports}
+    """
+    if admin_token != ADMIN_TOKEN:
+        raise HTTPException(403, "Admin token required")
+    if fmt != "csv":
+        return {"ok": False, "error": "fmt must be csv"}
+    if table not in ("listings", "payments", "users", "reports"):
+        return {"ok": False, "error": "table must be listings|payments|users|reports"}
+    from fastapi.responses import Response
+    import csv as _csv
+    import io as _io
+    buf = _io.StringIO()
+    writer = _csv.writer(buf)
+    queries = {
+        "listings": ("SELECT id, user_id, user_name, title, price, cat, tier, status, city, created FROM listings ORDER BY created DESC LIMIT 10000",
+                     ["id", "user_id", "user_name", "title", "price", "cat", "tier", "status", "city", "created"]),
+        "payments": ("SELECT listing_id, tier, amount_nano, comment, confirmed, created FROM ton_payments ORDER BY created DESC LIMIT 10000",
+                     ["listing_id", "tier", "amount_nano", "comment", "confirmed", "created"]),
+        "users": (None,
+                  ["id", "username", "first_name", "listings_count", "first_seen"]),
+        "reports": ("SELECT id, listing_id, reporter_id, reason, comment, status, created FROM reports ORDER BY created DESC LIMIT 10000",
+                    ["id", "listing_id", "reporter_id", "reason", "comment", "status", "created"]),
+    }
+    sql, cols = queries[table]
+    writer.writerow(cols)
+    try:
+        with db_cursor() as conn:
+            if table == "payments":
+                rows = conn.execute("SELECT listing_id, tier, amount_nano, comment, confirmed, created FROM ton_payments ORDER BY created DESC LIMIT 10000").fetchall()
+                for r in rows:
+                    d = _row_to_dict(r, cols)
+                    writer.writerow([d.get(c, "") for c in cols])
+            elif table == "users":
+                # users table может не существовать — агрегируем из listings
+                try:
+                    rows = conn.execute(
+                        "SELECT user_id, user_name, user_username, COUNT(*), MIN(created) "
+                        "FROM listings GROUP BY user_id ORDER BY MIN(created) DESC LIMIT 10000"
+                    ).fetchall()
+                except Exception:
+                    rows = []
+                for r in rows:
+                    if isinstance(r, dict):
+                        writer.writerow([r["user_id"], r["user_username"] or "", r["user_name"] or "", r.get("COUNT(*)", 0), r.get("MIN(created)", 0)])
+                    else:
+                        writer.writerow([r[0], r[2] or "", r[1] or "", r[3], r[4]])
+            else:
+                rows = conn.execute(sql).fetchall()
+                for r in rows:
+                    d = _row_to_dict(r, cols)
+                    writer.writerow([d.get(c, "") for c in cols])
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={table}.csv"},
+    )
+
+
+@app.post("/admin/payments/{payment_id}/refund")
+async def admin_refund_payment(payment_id: int, request: Request, admin_token: str = ""):
+    """Admin: пометить платёж как refunded (для ручного возврата через банк).
+
+    Body: {"reason": "..."}
+    """
+    if admin_token != ADMIN_TOKEN:
+        raise HTTPException(403, "Admin token required")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    reason = (body.get("reason") or "").strip()[:200]
+    now = int(time.time())
+    # ton_payments не имеет своих id — используем row_number через _next_id
+    with db_cursor() as conn:
+        rows = conn.execute("SELECT listing_id, tier, comment FROM ton_payments ORDER BY created DESC").fetchall()
+        if not rows or payment_id < 1 or payment_id > len(rows):
+            return {"ok": False, "error": "payment_not_found"}
+        target = rows[payment_id - 1]
+        if isinstance(target, dict):
+            listing_id, tier, comment = target["listing_id"], target.get("tier", ""), target.get("comment", "")
+        else:
+            listing_id, tier, comment = target[0], target[1] or "", target[2] or ""
+        # Получим user_id из listings
+        row = conn.execute("SELECT user_id FROM listings WHERE id=?", (listing_id,)).fetchone()
+        user_id = row["user_id"] if row and isinstance(row, dict) else (row[0] if row else None)
+        # Помечаем запись
+        conn.execute("UPDATE ton_payments SET confirmed=-2 WHERE listing_id=? AND comment=?",
+                     (listing_id, comment))
+        if listing_id:
+            conn.execute("UPDATE listings SET status='refunded' WHERE id=?", (listing_id,))
+        conn.commit()
+    # Уведомляем юзера о возврате
+    if bot and user_id:
+        try:
+            await bot.send_message(
+                int(user_id),
+                f"↩️ <b>Возврат по листингу</b> <code>{listing_id}</code>\n\n"
+                f"Средства возвращены. {('Причина: ' + reason) if reason else 'Свяжитесь с поддержкой, если нужны детали.'}",
+            )
+        except Exception as e:
+            logger.warning(f"refund notify failed: {e}")
+    return {"ok": True, "payment_id": payment_id, "listing_id": listing_id, "user_id": user_id, "status": "refunded"}
 
 
 @app.get("/admin/ui/me")
@@ -6719,7 +6958,7 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789766000 v82: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
+# deploy-trigger 1789767000 v82: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
 
 
 # --- deploy-marker-62cfc55: clear-cache signal ---
