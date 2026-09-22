@@ -210,6 +210,32 @@ const auth=()=>{
   // (бэк с DEMO_MODE=1 принимает любой tma, создаёт user_id=999999)
   return {Authorization:'tma demo'};
 };
+
+function showOpenInTelegram(reason){
+  // Показать большой full-screen блок с кнопкой "Открыть в Telegram"
+  if(document.getElementById('tgopen-overlay'))return;
+  const tg=window.Telegram?.WebApp;
+  const inTelegram = !!(tg && (tg.platform||'').length>0);
+  const url='https://t.me/Ibaraholka_bot?start=open';
+  const headline = reason || 'Открой Mini App через Telegram';
+  const html = '<div id="tgopen-overlay" style="position:fixed;inset:0;z-index:9999;background:#0B0B0F;display:flex;align-items:center;justify-content:center;padding:24px">' +
+    '<div style="max-width:380px;text-align:center">' +
+      '<div style="font-size:64px;margin-bottom:14px">📲</div>' +
+      '<h1 style="font-size:22px;margin:0 0 8px;color:#fff">'+esc(headline)+'</h1>' +
+      '<p style="font-size:14px;color:#a1a1aa;line-height:1.5;margin:0 0 22px">' +
+        'Ты открыл приложение <b>не через Telegram</b>'+(inTelegram?'.':', а Mini App работает только внутри Telegram — там безопасно и оплата проходит в 1 клик.')+
+      '</p>' +
+      '<a href="'+url+'" target="_blank" rel="noopener" onclick="if(window.Telegram?.WebApp?.openTelegramLink){try{window.Telegram.WebApp.openTelegramLink(\''+url+'\');return false;}catch(_){}}" ' +
+         'style="display:block;background:linear-gradient(135deg,#FF8A3D,#FF4D00);color:#0B0B0F;text-decoration:none;font-weight:700;padding:16px 20px;border-radius:14px;font-size:16px;margin-bottom:12px">' +
+        '🚀 Открыть в Telegram</a>' +
+      '<button onclick="copyUrlToClip(\''+url+'\')" style="display:block;width:100%;background:#27272a;color:#fff;border:0;font-weight:600;padding:13px;border-radius:12px;cursor:pointer;font-family:inherit;font-size:14px">' +
+        '📋 Скопировать ссылку на бота</button>' +
+      '<p style="font-size:12px;color:#71717a;margin-top:18px;line-height:1.4">' +
+        'После клика на «🚀 Открыть в Telegram» бот откроется → нажми <b>≡ Menu</b> внизу слева → <b>🛒 Айбарахолка</b>. Приложение загрузится с твоим профилем автоматически.</p>' +
+    '</div></div>';
+  document.body.insertAdjacentHTML('beforeend',html);
+}
+window.showOpenInTelegram=showOpenInTelegram;
 let _authReady=null;
 const waitAuth=()=>{
   if(_authReady)return _authReady;
@@ -275,8 +301,13 @@ async function load(){
     }
     render();
   }catch(e){
-    $('err').innerHTML='<div class="err">❌ '+esc(e.message)+'</div>';
-    $('list').innerHTML='<button class="btn-cta" onclick="load()">Повторить</button>';
+    // 401 = нет initData → юзер открыл Mini App не в Telegram. Показываем оверлей с кнопкой.
+    if((e.message||'').indexOf('401')>=0){
+      showOpenInTelegram('Ты открыл Mini App не в Telegram');
+    }else{
+      $('err').innerHTML='<div class="err">❌ '+esc(e.message)+'</div>';
+      $('list').innerHTML='<button class="btn-cta" onclick="load()">Повторить</button>';
+    }
   }
 }
 
@@ -659,7 +690,7 @@ function openSellForm(showWarning){
             return;
           }catch(e2){console.error('[v64] retry failed',e2);}
         }
-        showOpenViaBotModal();
+        showOpenInTelegram('Не удалось опубликовать — открой Mini App в Telegram');
       }
       return; // НЕ закрываем модалку
     }

@@ -7021,7 +7021,7 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789771000 v91: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
+# deploy-trigger 1789772000 v92: full-screen «Открой в Telegram» при отсутствии initData: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
 
 
 # --- deploy-marker-62cfc55: clear-cache signal ---
