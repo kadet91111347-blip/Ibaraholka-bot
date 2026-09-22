@@ -7058,3 +7058,8 @@ async def setup_webhook(request: Request):
 @app.get("/__deploy_marker__", tags=["debug"])
 def _deploy_marker():
     return {"deployed": "62cfc55", "time": int(time.time())}
+
+# === RENDER DEPLOYMENT TEST MARKER V98 ===
+import sys as _render_test_marker
+print("=== V98 MARKER LOADED ===", file=_render_test_marker.stderr)
+
