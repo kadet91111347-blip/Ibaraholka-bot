@@ -118,7 +118,7 @@ a{color:inherit;text-decoration:none}
 </style>
 </head>
 <body>
-<div id="vmark" style="background:linear-gradient(90deg,#7c3aed,#5b21b6);padding:10px;text-align:center;font-size:13px;font-weight:700;color:#0B0B0F">v94 · 10:50 — цикл разорван (кастомные Telegram-клиенты не зацикливаются, только маленький баннер-подсказка) · live — баннер и var v обновляются автоматически из RENDER_GIT_SHA при каждом деплое</div>
+<div id="vmark" style="background:linear-gradient(90deg,#7c3aed,#5b21b6);padding:10px;text-align:center;font-size:13px;font-weight:700;color:#0B0B0F">v95 · 11:30 — счётчики появляются мгновенно (публичный /listings без waitAuth), waitAuth 2.5с (кастомные Telegram-клиенты не зацикливаются, только маленький баннер-подсказка) · live — баннер и var v обновляются автоматически из RENDER_GIT_SHA при каждом деплое</div>
 <script>
 setTimeout(()=>{const m=document.getElementById('vmark');if(m&&location.search.indexOf('keep')<0)m.style.display='none';},12000);
 </script>
@@ -264,7 +264,7 @@ const waitAuth=()=>{
     const tick=()=>{
       const len=_tg?.initData?.length||0;
       if(len>10){console.log('[v65] initData ready len='+len);resolve(true);return;}
-      if(++n>100){console.warn('[v65] initData still empty after 10s — tg.platform='+_tg?.platform+' v='+_tg?.version+' initUnsafe.user='+JSON.stringify(_tg?.initDataUnsafe?.user||null));resolve(false);return;}
+      if(++n>25){console.warn('[v95] initData still empty after 2.5s — tg.platform='+_tg?.platform+' v='+_tg?.version+' initUnsafe.user='+JSON.stringify(_tg?.initDataUnsafe?.user||null));resolve(false);return;}
       setTimeout(tick,100);
     };
     tick();
@@ -293,13 +293,23 @@ async function apiDelete(p){const r=await fetch(API+p,{method:'DELETE',headers:a
 async function load(){
   $('list').innerHTML='<div style="text-align:center;padding:30px;color:#a1a1aa">Загрузка…</div>';
   try{
-    const data=await apiGet('/listings?cb='+Date.now());
-    if(!Array.isArray(data)) throw new Error('Не массив');
-    allListings=data;
-    const todayStart=Math.floor(Date.now()/1000)-86400;
-    $('sTotal').textContent=data.length;
-    $('sToday').textContent=data.filter(l=>{const c=l.created||0;const cs=c>1e10?Math.floor(c/1000):c;return cs>=todayStart;}).length;
-    $('sAvail').textContent=data.filter(l=>l.status!=='sold'&&l.status!=='archived').length;
+    // /listings публичный — дёргаем без waitAuth чтобы счётчики появились мгновенно
+    try{
+      const r0=await fetch(API+'/listings?cb='+Date.now(),{cache:'no-store'});
+      if(r0.ok){
+        const data0=await r0.json();
+        if(Array.isArray(data0)){
+          allListings=data0;
+          const todayStart=Math.floor(Date.now()/1000)-86400;
+          $('sTotal').textContent=data0.length;
+          $('sToday').textContent=data0.filter(l=>{const c=l.created||0;const cs=c>1e10?Math.floor(c/1000):c;return cs>=todayStart;}).length;
+          $('sAvail').textContent=data0.filter(l=>l.status!=='sold'&&l.status!=='archived').length;
+        }
+      }
+    }catch(_){}
+    // Теперь для auth-зависимых эндпоинтов ждём initData (но не дольше 2.5с)
+    await waitAuth();
+    const data=allListings||[];
     $('err').innerHTML='';
     if(_tg?.initData?.length>10){
       myId=(_tg.initDataUnsafe?.user?.id)||0;
