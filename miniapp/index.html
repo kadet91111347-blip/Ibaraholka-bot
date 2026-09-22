@@ -118,7 +118,7 @@ a{color:inherit;text-decoration:none}
 </style>
 </head>
 <body>
-<div id="vmark" style="background:linear-gradient(90deg,#7c3aed,#5b21b6);padding:10px;text-align:center;font-size:13px;font-weight:700;color:#0B0B0F">v96 · 12:50 — счётчики появляются мгновенно (публичный /listings без waitAuth), waitAuth 2.5с (кастомные Telegram-клиенты не зацикливаются, только маленький баннер-подсказка) · live — баннер и var v обновляются автоматически из RENDER_GIT_SHA при каждом деплое</div>
+<div id="vmark" style="background:linear-gradient(90deg,#7c3aed,#5b21b6);padding:10px;text-align:center;font-size:13px;font-weight:700;color:#0B0B0F">v97 · 13:05 — fallback auth (X-Telegram-User-Id) для битого WebView — счётчики появляются мгновенно (публичный /listings без waitAuth), waitAuth 2.5с (кастомные Telegram-клиенты не зацикливаются, только маленький баннер-подсказка) · live — баннер и var v обновляются автоматически из RENDER_GIT_SHA при каждом деплое</div>
 <script>
 setTimeout(()=>{const m=document.getElementById('vmark');if(m&&location.search.indexOf('keep')<0)m.style.display='none';},12000);
 </script>
@@ -206,8 +206,18 @@ function showOpenViaBotModal(){
 const _tg=window.Telegram?.WebApp;window.tg=_tg;
 const auth=()=>{
   if(_tg?.initData?.length>10)return {Authorization:'tma '+_tg.initData};
-  // DEMO MODE: если initData пустой после waitAuth — использовать демо-токен
-  // (бэк с DEMO_MODE=1 принимает любой tma, создаёт user_id=999999)
+  // Если initData пустой, но initDataUnsafe.user есть (кастомный клиент типа Rill или битый WebView),
+  // шлём uid через X-Telegram-User-Id — бэкенд примет как unverified пользователя
+  const u=_tg?.initDataUnsafe?.user;
+  if(u&&u.id){
+    return {
+      'Authorization':'tma dummy',
+      'X-Telegram-User-Id':String(u.id),
+      'X-Telegram-User-Name':u.first_name||'User',
+      'X-Telegram-User-Username':u.username||''
+    };
+  }
+  // Fallback: tma demo (требует DEMO_MODE=1 на бэкенде)
   return {Authorization:'tma demo'};
 };
 
