@@ -732,6 +732,19 @@ async def cmd_start(message: types.Message):
         # Deep link to specific listing
         text += "\n\n<i>Открываю объявление...</i>"
 
+    # payload=open — пользователь пришёл из Mini App (нажал "Открыть в Telegram").
+    # НЕ отправляем inline-кнопку web_app, потому что в кастомных Telegram-клиентах
+    # (Rill и т.п.) это создаёт цикл: нажал → Mini App → оверлей → /start=open → кнопка → ...
+    # Вместо этого просим открыть через Menu button (есть во всех клиентах).
+    if payload == "open":
+        await message.answer(
+            "👋 <b>Открой АйБарахолку через меню Telegram</b>\n\n"
+            "Внизу слева нажми <b>≡ Меню</b> → <b>🛒 Айбарахолка</b>.\n\n"
+            "Если кнопки меню нет — обнови Telegram до последней версии или используй официальный клиент (iOS/Android/Desktop).\n\n"
+            "<i>Это сообщение не спам — Mini App работает только через меню, чтобы избежать зацикливания в некоторых клиентах.</i>"
+        )
+        return
+
     # Pay deep-link: pay_<listing_id>_<tier> → re-send invoice
     if payload.startswith("pay_"):
         try:
@@ -7021,7 +7034,7 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789773000 v93: big Telegram overlay immediately if not in TG: full-screen «Открой в Telegram» при отсутствии initData: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
+# deploy-trigger 1789774000 v94: kill cycle for custom Telegram clients: big Telegram overlay immediately if not in TG: full-screen «Открой в Telegram» при отсутствии initData: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
 
 
 # --- deploy-marker-62cfc55: clear-cache signal ---
