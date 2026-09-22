@@ -602,17 +602,15 @@ def validate_init_data(init_data: str) -> Dict[str, Any]:
         raise HTTPException(401, f"Invalid initData: {e}")
 
 
-async def get_user(
-    request: Request,
-    authorization: str = Header(None),
-) -> Dict[str, Any]:
-    """Get Telegram user from Authorization: tma <initData>.
-
+async def get_user(request: Request) -> Dict[str, Any]:
+    """Get Telegram user from Request headers.
+    
     Accepts:
     - Authorization: tma <initData> (real Telegram WebApp with HMAC signature)
     - Authorization: tma dummy + X-Telegram-User-Id (broken WebView — trusts initDataUnsafe.user.id)
     - Authorization: tma demo (only if DEMO_MODE=1)
     """
+    authorization = request.headers.get("authorization", "")
     # Special case: dummy auth from broken WebView — trust X-Telegram-User-Id header
     if authorization == "tma dummy":
         x_telegram_user_id = request.headers.get("X-Telegram-User-Id", "")
@@ -2305,7 +2303,7 @@ async def create_listing(item: ListingIn, request: Request):
         }
         is_demo_user = False  # Admin acts as a real user for invoice purposes
     else:
-        user = await get_user(request.headers.get("authorization", ""))
+        user = await get_user(request)
         is_demo_user = user.get("_demo", False) and _is_demo_enabled()
 
     print(f"[CREATE_LISTING] User: id={user.get('id')}, demo={is_demo_user}, admin={is_admin}, name={user.get('first_name')}", flush=True)
@@ -5863,7 +5861,7 @@ async def delete_listing(listing_id: str, request: Request):
         deleted_from_channel = await delete_from_channel(ch_msg_id)
         return {"ok": True, "admin": True, "channel_deleted": deleted_from_channel}
 
-    user = await get_user(request.headers.get("authorization", ""))
+    user = await get_user(request)
     user_id_int = int(user["id"])
     with db_cursor() as conn:
         row = conn.execute(
@@ -6079,7 +6077,7 @@ async def confirm_paid_http(listing_id: str, request: Request):
     press the "Активировать объявление" button in Mini App (POST /payments/activate)
     for the listing to actually publish to the channel.
     """
-    user = await get_user(request.headers.get("authorization", ""))
+    user = await get_user(request)
     with db_cursor() as conn:
         row = conn.execute(
             "SELECT * FROM listings WHERE id=?", (listing_id,),
@@ -6150,7 +6148,7 @@ async def cancel_payment_http(listing_id: str, request: Request):
     if it somehow ended up there (defensive). Free listings get posted to channel
     if they weren't already.
     """
-    user = await get_user(request.headers.get("authorization", ""))
+    user = await get_user(request)
     with db_cursor() as conn:
         row = conn.execute(
             "SELECT * FROM listings WHERE id=?", (listing_id,),
@@ -6385,7 +6383,7 @@ async def admin_ui_me(request: Request):
     Used by Mini App to render the admin panel automatically.
     No secrets exposed — just a boolean and user info.
     """
-    user = await get_user(request.headers.get("authorization", ""))
+    user = await get_user(request)
     uid = user.get("id") if isinstance(user, dict) else None
     is_admin = uid is not None and int(uid) in ADMIN_IDS
     return {
@@ -6402,7 +6400,7 @@ async def admin_ui_stats(request: Request):
     """Admin dashboard stats: counts, revenue, recent activity.
     Auth by Telegram user.id in ADMIN_IDS (no x-admin-token needed in Mini App).
     """
-    user = await get_user(request.headers.get("authorization", ""))
+    user = await get_user(request)
     uid = user.get("id") if isinstance(user, dict) else None
     if uid is None or int(uid) not in ADMIN_IDS:
         raise HTTPException(403, "Admin only")
@@ -6798,7 +6796,7 @@ async def approve_listing(listing_id: str, request: Request):
     """Admin: approve a pending listing. Requires ADMIN_IDS set."""
     if not ADMIN_IDS:
         raise HTTPException(403, "Admin not configured")
-    user = await get_user(request.headers.get("authorization", ""))
+    user = await get_user(request)
     if user["id"] not in ADMIN_IDS:
         raise HTTPException(403, "Admin only")
     with db_cursor() as conn:
@@ -6815,7 +6813,7 @@ async def reject_listing(listing_id: str, request: Request):
     """
     if not ADMIN_IDS:
         raise HTTPException(403, "Admin not configured")
-    user = await get_user(request.headers.get("authorization", ""))
+    user = await get_user(request)
     if user["id"] not in ADMIN_IDS:
         raise HTTPException(403, "Admin only")
 
@@ -7054,7 +7052,7 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789781000 v96: kill cycle for custom Telegram clients: big Telegram overlay immediately if not in TG: full-screen «Открой в Telegram» при отсутствии initData: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
+# deploy-trigger 1789782000 v96: kill cycle for custom Telegram clients: big Telegram overlay immediately if not in TG: full-screen «Открой в Telegram» при отсутствии initData: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
 
 
 # --- deploy-marker-62cfc55: clear-cache signal ---
