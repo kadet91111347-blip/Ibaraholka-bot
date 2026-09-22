@@ -616,18 +616,23 @@ async def get_user(
     - Authorization: tma demo (only if DEMO_MODE=1)
     """
     # Special case: dummy auth from broken WebView — trust X-Telegram-User-Id header
-    if authorization == "tma dummy" and x_telegram_user_id:
-        try:
-            uid = int(x_telegram_user_id)
-            if uid > 0:
-                return {
-                    "id": uid,
-                    "first_name": x_telegram_user_name or "User",
-                    "username": x_telegram_user_username or None,
-                    "_unverified": True,  # No HMAC verified — trusted only via user-set headers
-                }
-        except (ValueError, TypeError):
-            pass
+    if authorization == "tma dummy":
+        print(f"[DUMMY_AUTH] authorization={authorization!r} x_telegram_user_id={x_telegram_user_id!r} x_telegram_user_name={x_telegram_user_name!r}", flush=True)
+        if x_telegram_user_id:
+            try:
+                uid = int(x_telegram_user_id)
+                if uid > 0:
+                    print(f"[DUMMY_AUTH] returning uid={uid}", flush=True)
+                    return {
+                        "id": uid,
+                        "first_name": x_telegram_user_name or "User",
+                        "username": x_telegram_user_username or None,
+                        "_unverified": True,  # No HMAC verified — trusted only via user-set headers
+                    }
+            except (ValueError, TypeError):
+                pass
+        print("[DUMMY_AUTH] FALLTHROUGH", flush=True)
+        raise HTTPException(401, "dummy_auth_no_uid")
     # Special case: header "tma demo" → bypass auth in DEMO_MODE (for browser testing)
     if authorization == "tma demo":
         if DEMO_MODE:
@@ -7051,7 +7056,7 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789779000 v96: kill cycle for custom Telegram clients: big Telegram overlay immediately if not in TG: full-screen «Открой в Telegram» при отсутствии initData: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
+# deploy-trigger 1789780000 v96: kill cycle for custom Telegram clients: big Telegram overlay immediately if not in TG: full-screen «Открой в Telegram» при отсутствии initData: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
 
 
 # --- deploy-marker-62cfc55: clear-cache signal ---
