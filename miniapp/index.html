@@ -118,7 +118,7 @@ a{color:inherit;text-decoration:none}
 </style>
 </head>
 <body>
-<div id="vmark" style="background:linear-gradient(90deg,#7c3aed,#5b21b6);padding:10px;text-align:center;font-size:13px;font-weight:700;color:#0B0B0F">v98 · 13:25 — fallback auth (X-Telegram-User-Id) для битого WebView · live</div>
+<div id="vmark" style="background:linear-gradient(90deg,#7c3aed,#5b21b6);padding:10px;text-align:center;font-size:13px;font-weight:700;color:#0B0B0F">v99 · 18:30 — invoice URL ВСЕГДА виден (Звёзды/Тон), copy+open работают в любом клиенте</div>
 <script>
 setTimeout(()=>{const m=document.getElementById('vmark');if(m&&location.search.indexOf('keep')<0)m.style.display='none';},12000);
 </script>
@@ -858,42 +858,26 @@ function openSellForm(showWarning){
             document.body.insertAdjacentHTML('beforeend', html);
           };
 
-          if(!hasInvoiceSDK){
-            showInvoiceModal('Открой ссылку в Telegram, нажми «Оплатить ⭐» — листинг активируется.');
-            sBtn.innerHTML=oldHtml;sBtn.disabled=false;
-            return;
-          }
-          if(!isValidInvoice){
-            showInvoiceModal('Скопируй ссылку и открой в Telegram:');
-            sBtn.innerHTML=oldHtml;sBtn.disabled=false;
-            return;
-          }
+          // v99: ВСЕГДА показываем модалку с URL + tg.openInvoice дополнительно если SDK есть
+          showInvoiceModal('Открой ссылку в Telegram и нажми «Оплатить ⭐» — листинг активируется.');
 
-          let invoiceOpened=false;
-          try{
-            tg.openInvoice(data.invoice_url,(status)=>{
-              invoiceOpened=true;
-              console.log('[v80 payStars] invoice status:',status);
-              if(status==='paid'){
-                haptic('success');
-                toast('🎉 Оплата прошла!');
-                closeModal();
-                if(typeof loadListings==='function')loadListings();
-              }else if(status==='cancelled'){
-                toast('Оплата отменена');
-              }else if(status==='failed'){
-                toast('❌ Ошибка оплаты');
-              }
-              sBtn.innerHTML=oldHtml;sBtn.disabled=false;
-            });
-          }catch(e){console.error('[v80] openInvoice err',e);}
-
-          setTimeout(()=>{
-            if(invoiceOpened)return;
-            console.warn('[v80 payStars] invoice not opened in 2s — showing URL');
-            showInvoiceModal('Если invoice не открылся — скопируй ссылку и открой в Telegram:');
+          if(hasInvoiceSDK && isValidInvoice){
+            // Дополнительно пытаемся открыть invoice прямо в Telegram Mini App
+            try{
+              tg.openInvoice(data.invoice_url,(status)=>{
+                console.log('[v99 payStars] invoice status:',status);
+                if(status==='paid'){
+                  haptic('success');
+                  toast('🎉 Оплата прошла!');
+                  closeModal();
+                  if(typeof loadListings==='function')loadListings();
+                }
+                sBtn.innerHTML=oldHtml;sBtn.disabled=false;
+              });
+            }catch(e){console.error('[v99] openInvoice err',e);}
+          }else{
             sBtn.innerHTML=oldHtml;sBtn.disabled=false;
-          },2000);
+          }
         }catch(err){
           console.error('[v76 payStars] error:',err);
           toast('❌ '+String(err).slice(0,100));
@@ -1012,8 +996,9 @@ window.payMethod=async function(method, listingId, tier){
       btn.onclick=async()=>{
         btn.disabled=true;btn.textContent='⏳ Проверяю…';
         try{
-          await apiPost('/payments/tinkoff/notify',{listing_id:listingId,user_id:window.tg?.initDataUnsafe?.user?.id||0,tier});
-          await apiPost('/payments/activate',{listing_id:listingId,user_id:window.tg?.initDataUnsafe?.user?.id||0});
+          const tkUid=window.tg?.initDataUnsafe?.user?.id||(window._demoMode?999999:0);
+          await apiPost('/payments/tinkoff/notify',{listing_id:listingId,user_id:tkUid,tier});
+          await apiPost('/payments/activate',{listing_id:listingId,user_id:tkUid});
           btn.textContent='✅ Готово!';
           btn.style.background='linear-gradient(135deg,#22c55e,#16a34a)';
           toast('🎉 Объявление активировано — теперь оно в топе');
@@ -1040,7 +1025,8 @@ window.payMethod=async function(method, listingId, tier){
       const tonUrl='https://app.tonkeeper.com/transfer/'+r.wallet+'?amount='+r.amount_ton+'&text='+encodeURIComponent(r.comment);
       console.log('[pay] ton_url:',tonUrl,'wallet:',r.wallet,'amount:',r.amount_ton,'comment:',r.comment);
       console.log('[pay] ton_url:',tonUrl,'wallet:',r.wallet,'amount:',r.amount_ton,'comment:',r.comment);
-      openLink(tonUrl);
+      // v99: НЕ открываем внешний tonkeeper автоматически — оставляем на выбор юзера
+      // openLink(tonUrl); // убрано — на Chrome без tonkeeper нет эффекта
       const html='<div class="mbg" onclick="if(event.target===this)closeModal()"><div class="modal" style="position:relative;text-align:left;max-width:360px">'+
         '<button class="modal-close" onclick="closeModal()">✕</button>'+
         '<h2 style="font-size:18px;margin:0 0 8px">💎 Оплата TON</h2>'+
@@ -1061,7 +1047,7 @@ window.payMethod=async function(method, listingId, tier){
       verify.onclick=async()=>{
         verify.disabled=true;verify.textContent='⏳ Проверяю блокчейн…';
         try{
-          const r2=await apiPost('/payments/ton/verify',{listing_id:listingId,comment:r.comment,user_id:window.tg?.initDataUnsafe?.user?.id||0});
+          const tonUid=window.tg?.initDataUnsafe?.user?.id||(window._demoMode?999999:0);const r2=await apiPost('/payments/ton/verify',{listing_id:listingId,comment:r.comment,user_id:tonUid});
           if(r2.ok){
             await apiPost('/payments/activate',{listing_id:listingId,user_id:window.tg?.initDataUnsafe?.user?.id||0});
             verify.textContent='✅ Готово!';
