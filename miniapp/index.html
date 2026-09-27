@@ -332,16 +332,16 @@ async function load(){
         const favs=await apiGet('/favorites');
         if(Array.isArray(favs.favorites)) favSet=new Set(favs.favorites.map(f=>f.id||f.listing_id));
       }catch(_){}
-      // Admin check (independent of me() — works even if initDataUnsafe is partial)
-      try{
-        const adm=await apiGet('/admin/ui/me');
-        if(adm&&adm.is_admin){
-          const ab=document.getElementById('adminBtn');if(ab)ab.style.display='block';
-        }
-      }catch(_){}
     }else if(me()){
       myId=me().id;
     }
+    // Admin check ВСЕГДА (даже если initData пустой — бэкенд через tma demo вернёт is_admin если юзер в ADMIN_USERNAMES)
+    try{
+      const adm=await apiGet('/admin/ui/me');
+      if(adm&&adm.is_admin){
+        const ab=document.getElementById('adminBtn');if(ab)ab.style.display='block';
+      }
+    }catch(_){}
     render();
   }catch(e){
     // 401 = нет initData → юзер открыл Mini App не в Telegram. Показываем оверлей с кнопкой.
