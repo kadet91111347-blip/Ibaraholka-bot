@@ -210,7 +210,7 @@ const auth=()=>{
 };
 
 // Минимальная подсказка вместо полноэкранного оверлея (vmark убран, Rill-цикл разорван через username_pin admin)
-  var v = "v114 · 20:20 tinkoff-blocked-fallback"
+  var v = "v115 · 23:25 tinkoff-app-intent"
 function showOpenInTelegram(reason){
   // Лёгкий top-toast — больше не блокируем экран
   if(document.getElementById('tgopen-toast'))return;
@@ -1124,12 +1124,22 @@ window.payMethod=async function(method, listingId, tier){
           '<div style="display:flex;justify-content:space-between;padding:3px 0"><span>ID</span><b style="color:#fff;font-family:monospace">#'+listingId.replace('l_','')+'</b></div>'+
         '</div>'+
         '<button class="btn-cta" id="tinkoffPaid" style="width:100%;background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;font-weight:700;padding:14px;border-radius:12px;margin-bottom:8px;border:0;cursor:pointer;font-size:14px">✅ Я оплатил — Активировать</button>'+
-        '<button class="btn-cta" id="tinkoffOpenTg" style="width:100%;background:linear-gradient(135deg,#0088cc,#229ED9);color:#fff;font-weight:700;padding:14px;border-radius:12px;margin-bottom:8px;border:0;cursor:pointer;font-size:14px">📱 Открыть в Telegram</button>'+
-        '<button class="btn-cta" id="tinkoffOpenExt" style="width:100%;background:#FFDD2D;color:#0B0B0F;margin-bottom:8px">🌐 Открыть в браузере</button>'+
+        '<button class="btn-cta" id="tinkoffOpenApp" style="width:100%;background:linear-gradient(135deg,#FFDD2D,#F2C200);color:#0B0B0F;font-weight:700;padding:14px;border-radius:12px;margin-bottom:8px;border:0;cursor:pointer;font-size:14px">📱 Открыть в приложении Т‑Банк</button>'+
+        '<button class="btn-cta" id="tinkoffOpenTg" style="width:100%;background:linear-gradient(135deg,#0088cc,#229ED9);color:#fff;font-weight:700;padding:14px;border-radius:12px;margin-bottom:8px;border:0;cursor:pointer;font-size:14px">📲 Открыть в браузере Telegram</button>'+
+        '<button class="btn-cta" id="tinkoffOpenExt" style="width:100%;background:#3f3f46;color:#fff;margin-bottom:8px">🌐 Открыть в Chrome</button>'+
         '<button class="btn-cta" id="tinkoffCopy" style="width:100%;background:transparent;color:#a1a1aa;border:1px solid #27272a">📋 Скопировать ссылку</button>'+
         '</div></div>';
       document.body.insertAdjacentHTML('beforeend',html);
       // Hook buttons
+      document.getElementById('tinkoffOpenApp').onclick=()=>{
+        try{
+          // Android intent: открывает приложение Т-Банк напрямую, минуя браузер с SSL
+          const intentUrl='intent://www.tinkoff.ru/rm/'+encodeURIComponent(url.split('/rm/')[1]||url)+'#Intent;scheme=https;package=ru.tinkoff;S.browser_fallback_url='+encodeURIComponent(url)+';end';
+          const a=document.createElement('a');a.href=intentUrl;a.style.display='none';document.body.appendChild(a);
+          a.click();setTimeout(()=>a.remove(),100);
+          toast('📱 Открываю Т‑Банк…');
+        }catch(e){toast('❌ Не открылось — попробуй «Скопировать ссылку»');}
+      };
       document.getElementById('tinkoffOpenTg').onclick=()=>{
         try{
           if(tg?.openLink){tg.openLink(url);toast('💳 Открываю Т-Банк в Telegram…');}
