@@ -210,7 +210,7 @@ const auth=()=>{
 };
 
 // Минимальная подсказка вместо полноэкранного оверлея (vmark убран, Rill-цикл разорван через username_pin admin)
-  var v = "v113 · 20:15 tbank-auto-open"
+  var v = "v114 · 20:20 tinkoff-blocked-fallback"
 function showOpenInTelegram(reason){
   // Лёгкий top-toast — больше не блокируем экран
   if(document.getElementById('tgopen-toast'))return;
@@ -836,7 +836,8 @@ function openSellForm(showWarning){
         <button class="btn-cta" style="width:100%;background:transparent;color:#a1a1aa;margin-top:10px;border:0;cursor:pointer;font-size:13px" onclick="closeModal()">Оплачу позже</button>
       </div></div>`;
       document.body.insertAdjacentHTML('beforeend',html);
-    // v113: возврат к старому поведению (как работало до v110) — сразу открываем tinkoff
+    // v114: НЕ открываем tinkoff (устройство может не доверять SSL).
+    // Сразу показываем модалку с альтернативами — ⭐ Звёзды (рекомендуется), 💎 TON, 📋 реквизиты вручную.
     const tBtn=document.getElementById('payTbankBtn');
     if(tBtn){
       tBtn.onclick=async(e)=>{
@@ -844,34 +845,110 @@ function openSellForm(showWarning){
         const listingId=tBtn.dataset.listingId;
         const tier=tBtn.dataset.tier;
         const amount=parseInt(tBtn.dataset.amount)||0;
-        const url='https://www.tinkoff.ru/rm/r_TGugYbYVEb.mLmrPUwlTy/aHI4Y75190?amount='+(amount*100)+'&successURL=https://t.me/Ibaraholka_bot';
-        console.log('[v113 payTbank] url:',url);
-        // Сразу открываем tinkoff:
-        // - В Telegram WebView: tg.openLink с try_in_app_browser=true → встроенный браузер Telegram (Chrome не блокирует)
-        // - В обычном Chrome: window.open → Chrome
-        const tg=window.Telegram?.WebApp;
-        try {
-          if (tg && tg.openLink) {
-            tg.openLink(url, { try_in_app_browser: true });
-            toast('💳 Открываю Тинькофф…');
-          } else {
-            window.open(url, '_blank');
-            toast('🌐 Открываю в браузере…');
-          }
-        } catch (err) {
-          toast('❌ Ошибка открытия — попробуй ⭐ Звёзды или 💎 TON');
-          console.error('[v113]', err);
-        }
-        // Страховка через 500мс — если всё ещё видно окно, попробуем ещё раз
-        setTimeout(()=>{
-          if (document.visibilityState === 'visible') {
-            try {
-              if (tg && tg.openLink) tg.openLink(url, { try_in_app_browser: true });
-              else window.open(url, '_blank');
-            } catch(e) { /* silent */ }
-            toast('ℹ️ Если банк не открылся — попробуй ⭐ Звёзды или 💎 TON');
-          }
-        }, 500);
+        const stars=tier==='vip'?150:50;
+        const tonAmt=tier==='vip'?'0.75':'0.25';
+        const comment='pay_'+listingId;
+        const card='2200 7007 2222 5678';
+        const tonWallet='UQCAhDLD17FVwmprVze2V35mICOqjmEpBdJF-cJyCZqfph-3';
+        console.log('[v114 payTbank] listingId:',listingId,'amount:',amount,'tier:',tier);
+
+        // Сразу создаём модалку с 3 альтернативами + реквизиты для ручного перевода
+        const html = `<div class="mbg" onclick="if(event.target===this)this.remove()" style="position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px">
+          <div style="background:#18181b;border:1px solid #FFDD2D;border-radius:14px;padding:18px;max-width:380px;width:100%;max-height:90vh;overflow-y:auto">
+            <div style="font-size:18px;font-weight:700;color:#FFDD2D;margin-bottom:6px">💳 Оплата тарифа ${tier.toUpperCase()}</div>
+            <div style="font-size:13px;color:#a1a1aa;margin-bottom:14px">3 способа. Звёзды — мгновенно, без браузера.</div>
+
+            <button id="v114_stars" class="btn-cta" style="display:flex;align-items:center;justify-content:space-between;background:linear-gradient(135deg,#FFD75E,#FFB800);color:#0B0B0F;font-weight:700;padding:14px 16px;border-radius:12px;border:0;margin-bottom:8px;font-size:14px;cursor:pointer;width:100%"><span style="font-size:22px">⭐</span><span style="flex:1;text-align:left;margin-left:12px">Звёзды Telegram — ${stars}★</span><span style="font-size:11px;background:#22C55E;color:#fff;padding:2px 8px;border-radius:6px">МОМЕНТАЛЬНО</span></button>
+
+            <button id="v114_ton" class="btn-cta" style="display:flex;align-items:center;justify-content:space-between;background:linear-gradient(135deg,#0098EA,#0078C8);color:#fff;font-weight:700;padding:14px 16px;border-radius:12px;border:0;margin-bottom:8px;font-size:14px;cursor:pointer;width:100%"><span style="font-size:22px">💎</span><span style="flex:1;text-align:left;margin-left:12px">TON — ${tonAmt} TON</span><span style="font-size:18px">→</span></button>
+
+            <div style="margin-top:14px;background:#0B0B0F;border:1px solid #27272a;border-radius:10px;padding:12px">
+              <div style="font-size:13px;font-weight:600;color:#a1a1aa;margin-bottom:8px">📋 Или оплати вручную (СБП / карта):</div>
+              <div style="font-size:13px;color:#a1a1aa;margin-bottom:6px">💳 Карта Тинькофф:</div>
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+                <code id="v114_card" style="font-family:monospace;background:#18181b;padding:8px 10px;border-radius:8px;font-size:14px;color:#FFDD2D;flex:1;border:1px solid #27272a">${card}</code>
+                <button id="v114_copy_card" class="btn-cta" style="background:#27272a;color:#fff;border:0;padding:8px 12px;border-radius:8px;cursor:pointer;font-size:12px">📋</button>
+              </div>
+              <div style="font-size:13px;color:#a1a1aa;margin-bottom:6px">💬 Комментарий к переводу (обязательно!):</div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <code id="v114_comment" style="font-family:monospace;background:#18181b;padding:8px 10px;border-radius:8px;font-size:13px;color:#FFDD2D;flex:1;border:1px solid #27272a">${comment}</code>
+                <button id="v114_copy_comment" class="btn-cta" style="background:#27272a;color:#fff;border:0;padding:8px 12px;border-radius:8px;cursor:pointer;font-size:12px">📋</button>
+              </div>
+              <div style="font-size:11px;color:#71717a;margin-top:10px;line-height:1.4">ℹ️ Сумма: ${amount} ₽. Перевод через СБП в приложении Тинькофф, Сбербанк или любом другом — комментарий обязателен.</div>
+            </div>
+
+            <button id="v114_paid" class="btn-cta" style="width:100%;background:linear-gradient(135deg,#22C55E,#16A34A);color:#fff;font-weight:700;padding:12px;border-radius:10px;border:0;font-size:14px;cursor:pointer;margin-top:12px">✅ Я оплатил — активировать ${stars}★ / ${amount}₽</button>
+            <button class="btn-cta" style="width:100%;background:transparent;color:#a1a1aa;margin-top:8px;border:0;cursor:pointer;font-size:13px" onclick="this.closest('.mbg').remove()">Закрыть</button>
+          </div>
+        </div>`;
+        document.body.insertAdjacentHTML('beforeend', html);
+        const mbg = document.body.lastElementChild;
+        const tg = window.Telegram?.WebApp;
+
+        // Звёзды → та же логика, что и payStarsBtn (invoice)
+        mbg.querySelector('#v114_stars').onclick = async () => {
+          mbg.querySelector('#v114_stars').disabled = true;
+          mbg.querySelector('#v114_stars').textContent = '⏳ Создаю invoice…';
+          try {
+            const r = await fetch((window.API_BASE||'')+'/payments/stars/invoice', {
+              method:'POST',
+              headers:{...(tg ? {'X-Telegram-User-Id': String(tg.initDataUnsafe?.user?.id||''), 'X-Telegram-Username': tg.initDataUnsafe?.user?.username||''} : {}), 'Content-Type':'application/json'},
+              body:JSON.stringify({listing_id:listingId})
+            });
+            const data = await r.json();
+            if (data.ok && data.invoice_url && tg && tg.openInvoice) {
+              tg.openInvoice(data.invoice_url, () => { toast('⭐ Оплата принята!'); mbg.remove(); });
+            } else if (data.ok && data.invoice_url) {
+              window.open(data.invoice_url, '_blank');
+              toast('⭐ Открываю invoice в Telegram…');
+            } else {
+              toast('❌ '+(data.error||'Не удалось'));
+              mbg.querySelector('#v114_stars').disabled = false;
+              mbg.querySelector('#v114_stars').innerHTML = '<span style="font-size:22px">⭐</span><span style="flex:1;text-align:left;margin-left:12px">Звёзды Telegram — '+stars+'★</span><span style="font-size:11px;background:#22C55E;color:#fff;padding:2px 8px;border-radius:6px">МОМЕНТАЛЬНО</span>';
+            }
+          } catch(e) { toast('❌ Ошибка сети'); mbg.querySelector('#v114_stars').disabled = false; }
+        };
+
+        // TON
+        mbg.querySelector('#v114_ton').onclick = () => {
+          const tonUrl = `ton://transfer/${tonWallet}?amount=${parseFloat(tonAmt)*1e9}&text=${encodeURIComponent(comment)}`;
+          try {
+            if (tg && tg.openLink) tg.openLink(tonUrl);
+            else window.open(tonUrl, '_blank');
+            toast('💎 Открываю TON-кошелёк…');
+          } catch(e) { toast('❌ Установи TON-кошелёк'); }
+        };
+
+        // Копирование карты / комментария
+        mbg.querySelector('#v114_copy_card').onclick = () => {
+          navigator.clipboard.writeText(card.replace(/\s/g,''));
+          toast('✅ Номер карты скопирован');
+        };
+        mbg.querySelector('#v114_copy_comment').onclick = () => {
+          navigator.clipboard.writeText(comment);
+          toast('✅ Комментарий скопирован');
+        };
+
+        // Я оплатил
+        mbg.querySelector('#v114_paid').onclick = async () => {
+          try {
+            const r = await fetch((window.API_BASE||'')+'/listings/'+listingId+'/status', {
+              headers: tg ? {'X-Telegram-User-Id': String(tg.initDataUnsafe?.user?.id||'')} : {}
+            });
+            const data = await r.json();
+            if (data.ok && (data.status==='active' || data.status==='awaiting_payment')) {
+              toast('⏳ Платёж обрабатывается — проверю через пару секунд');
+              setTimeout(async () => {
+                const r2 = await fetch((window.API_BASE||'')+'/listings/'+listingId+'/status', {headers: tg ? {'X-Telegram-User-Id': String(tg.initDataUnsafe?.user?.id||'')} : {}});
+                const d2 = await r2.json();
+                if (d2.status==='active') { toast('✅ Объявление активировано!'); mbg.remove(); }
+                else toast('⏳ Платёж ещё не поступил. Если оплатил — подожди 1-2 мин');
+              }, 5000);
+            } else {
+              toast('ℹ️ Текущий статус: '+(data.status||'?'));
+            }
+          } catch(e) { toast('⏳ Если оплатил — подожди 1-2 мин'); }
+        };
         haptic('success');
       };
     }
