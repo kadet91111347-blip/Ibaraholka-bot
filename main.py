@@ -2049,6 +2049,28 @@ async def _get_user_sync(authorization: str) -> dict:
         return {"error": str(e.detail), "status_code": e.status_code}
 
 
+
+@app.get("/debug/what-auth", response_class=PlainTextResponse)
+async def what_auth(request: Request):
+    """Диагностика: что реально приходит от клиента."""
+    auth = request.headers.get("authorization", "(none)")
+    out = [f"authorization prefix: {auth[:40]!r} (len={len(auth)})"]
+    if auth.startswith("tma "):
+        data = auth[4:]
+        from urllib.parse import parse_qs, unquote
+        try:
+            params = parse_qs(data)
+            out.append(f"params keys: {list(params.keys())}")
+            if 'user' in params:
+                u = json.loads(unquote(params['user'][0]))
+                out.append(f"user: id={u.get('id')} username={u.get('username')} first={u.get('first_name')}")
+            out.append(f"has hash: {'hash' in params}")
+            if 'hash' in params:
+                out.append(f"hash length: {len(params['hash'][0])}")
+        except Exception as e:
+            out.append(f"parse error: {e}")
+    return "\n".join(out)
+
 @app.get("/debug/state", tags=["debug"])
 def debug_state():
     """Debug endpoint: show env vars + DB state."""
@@ -7067,7 +7089,7 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789784000 v96: kill cycle for custom Telegram clients: big Telegram overlay immediately if not in TG: full-screen «Открой в Telegram» при отсутствии initData: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
+# deploy-trigger 1789785000 v96: kill cycle for custom Telegram clients: big Telegram overlay immediately if not in TG: full-screen «Открой в Telegram» при отсутствии initData: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
 
 
 # --- deploy-marker-62cfc55: clear-cache signal ---
