@@ -2050,6 +2050,15 @@ async def _get_user_sync(authorization: str) -> dict:
 
 
 
+
+@app.get("/debug/what-auth-v2", response_class=PlainTextResponse)
+async def what_auth_v2(request: Request):
+    """v101: что реально приходит от клиента."""
+    auth = request.headers.get("authorization", "(none)")
+    user_h = request.headers.get("x-telegram-user-id", "(none)")
+    out = f"auth_len={len(auth)} auth_prefix={auth[:20]!r}\nuser_header={user_h}\nraw_headers={dict(request.headers)}"
+    return out
+
 @app.get("/debug/what-auth", response_class=PlainTextResponse)
 async def what_auth(request: Request):
     """Диагностика: что реально приходит от клиента."""
@@ -7089,7 +7098,7 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789785000 v96: kill cycle for custom Telegram clients: big Telegram overlay immediately if not in TG: full-screen «Открой в Telegram» при отсутствии initData: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
+# deploy-trigger 1789786000 v96: kill cycle for custom Telegram clients: big Telegram overlay immediately if not in TG: full-screen «Открой в Telegram» при отсутствии initData: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
 
 
 # --- deploy-marker-62cfc55: clear-cache signal ---
