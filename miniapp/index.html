@@ -210,7 +210,7 @@ const auth=()=>{
 };
 
 // Минимальная подсказка вместо полноэкранного оверлея (vmark убран, Rill-цикл разорван через username_pin admin)
-  var v = "v111 · 20:05 tbank-url-fix"
+  var v = "v112 · 20:08 in-app-browser-warning"
 function showOpenInTelegram(reason){
   // Лёгкий top-toast — больше не блокируем экран
   if(document.getElementById('tgopen-toast'))return;
@@ -852,9 +852,10 @@ function openSellForm(showWarning){
         const html = `<div class="mbg" onclick="if(event.target===this)this.remove()" style="position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px">
           <div style="background:#18181b;border:1px solid #FFDD2D;border-radius:14px;padding:18px;max-width:380px;width:100%">
             <div style="font-size:18px;font-weight:700;color:#FFDD2D;margin-bottom:6px">💳 Оплата Т-Банк · ${amount} ₽</div>
-            <div style="font-size:13px;color:#a1a1aa;margin-bottom:12px">Выберите способ открытия ссылки оплаты:</div>
-            <div style="background:#0B0B0F;border-radius:10px;padding:10px;margin-bottom:12px;word-break:break-all;font-family:monospace;font-size:11px;color:#a1a1aa">${safeUrl}</div>
-            <button class="btn-cta" id="v110_tg" style="width:100%;background:linear-gradient(135deg,#0088cc,#229ED9);color:#fff;font-weight:700;padding:14px;border-radius:12px;margin-bottom:8px;border:0;cursor:pointer;font-size:14px">📱 Открыть в Telegram</button>
+          <div style="font-size:13px;color:#a1a1aa;margin-bottom:12px">Выберите способ открытия ссылки оплаты:</div>
+          <div style="background:#0B0B0F;border-radius:10px;padding:10px;margin-bottom:12px;word-break:break-all;font-family:monospace;font-size:11px;color:#a1a1aa">${safeUrl}</div>
+          <div style="background:#7c2d12;border:1px solid #f97316;border-radius:8px;padding:8px;margin-bottom:10px;font-size:11px;color:#fed7aa;line-height:1.4">⚠️ Если Chrome пишет «сертификат невалидный» — это Chrome блокирует банк. Жми «Открыть в Telegram» (встроенный браузер) или оплати ⭐ Звёздами / 💎 TON прямо в Mini App.</div>
+          <button class="btn-cta" id="v110_tg" style="width:100%;background:linear-gradient(135deg,#0088cc,#229ED9);color:#fff;font-weight:700;padding:14px;border-radius:12px;margin-bottom:8px;border:0;cursor:pointer;font-size:14px">📱 Открыть в Telegram ✓ рекомендую</button>
             <button class="btn-cta" id="v110_ext" style="width:100%;background:#FFDD2D;color:#0B0B0F;font-weight:700;padding:14px;border-radius:12px;margin-bottom:8px;border:0;cursor:pointer;font-size:14px">🌐 Открыть в браузере</button>
             <button class="btn-cta" id="v110_copy" style="width:100%;background:transparent;color:#a1a1aa;border:1px solid #27272a;padding:12px;border-radius:10px;cursor:pointer;font-size:14px">📋 Скопировать ссылку</button>
             <button class="btn-cta" style="width:100%;background:#26262E;color:#a1a1aa;padding:8px;border-radius:8px;border:none;font-size:12px;cursor:pointer;margin-top:8px" onclick="this.closest('.mbg').remove()">Закрыть</button>
@@ -865,13 +866,13 @@ function openSellForm(showWarning){
         const mbg = document.body.lastElementChild;
         const tg = window.Telegram?.WebApp;
         mbg.querySelector('#v110_tg').onclick = () => {
-          try { if (tg && tg.openLink) { tg.openLink(url, {try_in_app_browser: true}); } else { window.open(url, '_blank'); } }
+          try { if (tg && tg.openLink) { tg.openLink(url, {try_in_app_browser: true}); toast('💳 Открываю в браузере Telegram…'); } else { window.open(url, '_blank'); } }
           catch (e) { toast('❌ Не открылось — скопируй ссылку'); }
-          setTimeout(()=>{ if(document.visibilityState==='visible'){ window.open(url,'_blank'); }}, 600);
+          setTimeout(()=>{ if(document.visibilityState==='visible'){ try{tg?.openLink(url,{try_in_app_browser:true});}catch(_){ window.open(url,'_blank');} }}, 600);
           haptic('success');
         };
         mbg.querySelector('#v110_ext').onclick = () => {
-          try { window.open(url, '_blank'); toast('🌐 Открываю в браузере…'); }
+          try { window.open(url, '_blank'); toast('🌐 Открываю в Chrome…'); }
           catch (e) { toast('❌ Не открылось'); }
         };
         mbg.querySelector('#v110_copy').onclick = () => {
