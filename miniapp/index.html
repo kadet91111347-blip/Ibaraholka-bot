@@ -210,6 +210,7 @@ const auth=()=>{
 };
 
 // Минимальная подсказка вместо полноэкранного оверлея (vmark убран, Rill-цикл разорван через username_pin admin)
+  var v = "v109 · 19:42 tbank-modal-only"
 function showOpenInTelegram(reason){
   // Лёгкий top-toast — больше не блокируем экран
   if(document.getElementById('tgopen-toast'))return;
@@ -1020,8 +1021,8 @@ window.payMethod=async function(method, listingId, tier){
       const url=r.tinkoff_url||r.confirmation_url;
       if(!url)throw new Error('no_pay_url');
       console.log('[pay] tinkoff_url:',url);
-      console.log('[pay] tinkoff_url:',url); openLink(url);
-      // Модалка "Я оплатил"
+      // v109: НЕ открываем URL автоматически (Chrome отдает SSL warning, Tinkoff имеет валидный серт но устройство блокирует).
+      // Показываем модалку и пользователь сам выбирает как открыть.
       const html='<div class="mbg" onclick="if(event.target===this)closeModal()"><div class="modal" style="position:relative;text-align:left;max-width:360px">'+
         '<button class="modal-close" onclick="closeModal()">✕</button>'+
         '<h2 style="font-size:18px;margin:0 0 8px">💳 Оплата Тинькофф</h2>'+
@@ -1032,10 +1033,20 @@ window.payMethod=async function(method, listingId, tier){
           '<div style="display:flex;justify-content:space-between;padding:3px 0"><span>ID</span><b style="color:#fff;font-family:monospace">#'+listingId.replace('l_','')+'</b></div>'+
         '</div>'+
         '<button class="btn-cta" id="tinkoffPaid" style="width:100%;background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;font-weight:700;padding:14px;border-radius:12px;margin-bottom:8px;border:0;cursor:pointer;font-size:14px">✅ Я оплатил — Активировать</button>'+
-        '<button class="btn-cta" style="width:100%;background:#FFDD2D;color:#0B0B0F;margin-bottom:8px" onclick="try{navigator.clipboard.writeText(\''+url+'\');toast(\'✅ Ссылка скопирована\');}catch(e){toast(\'❌ Не скопировалось\')}">📋 Скопировать ссылку оплаты</button>'+
-        '<button class="btn-cta" style="width:100%;background:transparent;color:#a1a1aa" onclick="window.open(\''+url+'\',\'_blank\')">🔗 Открыть снова</button>'+
+        '<button class="btn-cta" id="tinkoffOpenTg" style="width:100%;background:linear-gradient(135deg,#0088cc,#229ED9);color:#fff;font-weight:700;padding:14px;border-radius:12px;margin-bottom:8px;border:0;cursor:pointer;font-size:14px">📱 Открыть в Telegram</button>'+
+        '<button class="btn-cta" id="tinkoffOpenExt" style="width:100%;background:#FFDD2D;color:#0B0B0F;margin-bottom:8px">🌐 Открыть в браузере</button>'+
+        '<button class="btn-cta" id="tinkoffCopy" style="width:100%;background:transparent;color:#a1a1aa;border:1px solid #27272a">📋 Скопировать ссылку</button>'+
         '</div></div>';
       document.body.insertAdjacentHTML('beforeend',html);
+      // Hook buttons
+      document.getElementById('tinkoffOpenTg').onclick=()=>{
+        try{
+          if(tg?.openLink){tg.openLink(url);toast('💳 Открываю Т-Банк в Telegram…');}
+          else{window.open(url,'_blank');toast('💳 Открываю Т-Банк…');}
+        }catch(e){toast('❌ Не открылось — скопируй ссылку');}
+      };
+      document.getElementById('tinkoffOpenExt').onclick=()=>{try{window.open(url,'_blank');toast('💳 Открываю в браузере…');}catch(e){toast('❌ Не открылось');}};
+      document.getElementById('tinkoffCopy').onclick=()=>{try{navigator.clipboard.writeText(url);toast('✅ Ссылка скопирована — открой в браузере');}catch(e){toast('❌ Не удалось скопировать');}};
       // hook the "I paid" button
       const btn=document.getElementById('tinkoffPaid');
       btn.onclick=async()=>{
