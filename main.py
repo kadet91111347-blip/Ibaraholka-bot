@@ -240,6 +240,8 @@ def init_db():
             type TEXT DEFAULT 'sell',
             contact TEXT NOT NULL,
             photo TEXT DEFAULT '',
+            photos TEXT DEFAULT '', -- JSON array of photo URLs (до 5 шт), для галереи
+            video_url TEXT DEFAULT '', -- короткое видео-превью (опционально)
             tier TEXT DEFAULT 'free',
             city TEXT DEFAULT 'Москва',
             status TEXT DEFAULT 'pending',
@@ -568,6 +570,8 @@ def init_db():
     cols_to_add = [
         ("listings", "paid_at", "BIGINT DEFAULT NULL"),
         ("listings", "payment_idempotency_key", "TEXT DEFAULT NULL"),
+        ("listings", "photos", "TEXT DEFAULT ''"),
+        ("listings", "video_url", "TEXT DEFAULT ''"),
         ("user_balances", "vip_until", "INTEGER DEFAULT 0"),
         ("user_balances", "total_spent", "INTEGER NOT NULL DEFAULT 0"),
         ("user_balances", "updated", "BIGINT"),
@@ -707,7 +711,9 @@ class ListingIn(BaseModel):
     cat: str = Field(..., pattern="^(iphone|airpods|ipad|mac|watch|accs)$")
     type: str = Field(default="sell", pattern="^(sell|buy|exchange|opt)$")
     contact: str = Field(..., min_length=3, max_length=120)
-    photo: str = Field(default="", max_length=5_000_000)  # base64 dataURL
+    photo: str = Field(default="", max_length=5_000_000)  # base64 dataURL (для обратной совместимости)
+    photos: List[str] = Field(default_factory=list, max_length=20)  # до 5 URL/base64 (галерея)
+    video_url: str = Field(default="", max_length=500_000)  # опциональное видео
     tier: str = Field(default="free", pattern="^(free|premium|vip)$")
     city: str = Field(default="Москва", max_length=60)
 
@@ -2305,7 +2311,7 @@ def list_listings(
     with db_cursor() as conn:
         q = (
             "SELECT id, user_id, user_name, user_username, title, description, price, cat, type, "
-            "contact, photo, tier, city, status, created, expires_at "
+            "contact, photo, photos, video_url, tier, city, status, created, expires_at "
             "FROM listings "
             "WHERE status='active' AND (expires_at IS NULL OR expires_at > ?)"
         )
@@ -2343,8 +2349,24 @@ def list_listings(
             r304.headers["Cache-Control"] = "public, max-age=10"
             return r304
 
+        # Парсим photos JSON → list; оставляем совместимость со старым photo
+        items_out = []
+        for r in rows:
+            item = dict(r)
+            try:
+                ph = json.loads(item.get("photos") or "[]")
+                if not isinstance(ph, list):
+                    ph = []
+            except Exception:
+                ph = []
+            # Back-compat: если photos пуст, но photo есть — используем [photo]
+            if not ph and item.get("photo"):
+                ph = [item["photo"]]
+            item["photos"] = ph
+            items_out.append(item)
+
         resp = _Resp(
-            content=json.dumps([dict(r) for r in rows], ensure_ascii=False, default=str),
+            content=json.dumps(items_out, ensure_ascii=False, default=str),
             media_type="application/json",
         )
         resp.headers["Cache-Control"] = "public, max-age=10"
@@ -2430,12 +2452,22 @@ async def create_listing(item: ListingIn, request: Request):
     # Mini App and creates a new payment within the same hour, webhooks dedup.
     idempotency_key = f"payment:{listing_id}:{user['id']}:{int(datetime.now().timestamp()) // 3600}"
 
+    # Сборка photos: объединяем photo + photos[] в единый JSON-массив (до 5 шт)
+    photos_list = []
+    if item.photo:
+        photos_list.append(item.photo)
+    for p in (item.photos or []):
+        if p and p not in photos_list and len(photos_list) < 5:
+            photos_list.append(p)
+    photos_json = json.dumps(photos_list, ensure_ascii=False)
+    photo_first = photos_list[0] if photos_list else ""
+
     with db_cursor() as conn:
         conn.execute(
             """INSERT INTO listings
             (id, user_id, user_name, user_username, title, description, price, cat, type,
-             contact, photo, tier, city, status, created, expires_at, payment_idempotency_key)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+             contact, photo, photos, video_url, tier, city, status, created, expires_at, payment_idempotency_key)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 listing_id,
                 user["id"],
@@ -2447,7 +2479,9 @@ async def create_listing(item: ListingIn, request: Request):
                 item.cat,
                 item.type,
                 item.contact,
-                item.photo,
+                photo_first,
+                photos_json,
+                item.video_url or "",
                 item.tier,
                 item.city,
                 initial_status,
@@ -7212,7 +7246,7 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789790000 v96: kill cycle for custom Telegram clients: big Telegram overlay immediately if not in TG: full-screen «Открой в Telegram» при отсутствии initData: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
+# deploy-trigger 1789791000 v96: kill cycle for custom Telegram clients: big Telegram overlay immediately if not in TG: full-screen «Открой в Telegram» при отсутствии initData: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
 
 
 # --- deploy-marker-62cfc55: clear-cache signal ---

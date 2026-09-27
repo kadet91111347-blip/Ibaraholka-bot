@@ -60,6 +60,7 @@ a{color:inherit;text-decoration:none}
 .list{padding:8px 16px}
 .card{background:rgba(28,28,36,0.6);backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,0.06);border-radius:16px;padding:10px;margin-bottom:8px;display:flex;gap:10px}
 .emoji{width:40px;height:40px;background:linear-gradient(135deg,#26262E,#1c1c24);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}
+.thumb{width:56px;height:56px;border-radius:10px;overflow:hidden;flex-shrink:0;background:linear-gradient(135deg,#26262E,#1c1c24);position:relative;display:flex;align-items:center;justify-content:center}.thumb img{width:100%;height:100%;object-fit:cover;display:block}.thumb .e{font-size:24px;line-height:1}.thumb .count{position:absolute;bottom:2px;right:2px;background:rgba(0,0,0,.65);color:#fff;font-size:9px;font-weight:700;padding:1px 4px;border-radius:6px;line-height:1.2}.gallery{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;gap:4px;padding:4px;margin:-4px -4px 12px;background:#0B0B0F;border-radius:0}.gallery::-webkit-scrollbar{display:none}.gallery .slide{flex:0 0 100%;scroll-snap-align:start;scroll-snap-stop:always;aspect-ratio:1/1;border-radius:10px;overflow:hidden;background:#18181b;display:flex;align-items:center;justify-content:center}.gallery .slide img{width:100%;height:100%;object-fit:cover;display:block}.gallery .dots{display:flex;justify-content:center;gap:4px;margin-top:-6px;margin-bottom:10px}.gallery .dot{width:6px;height:6px;border-radius:50%;background:#3f3f46;transition:all .2s}.gallery .dot.on{background:#fb923c;width:18px;border-radius:3px}.photo-input{display:flex;gap:6px;overflow-x:auto;padding:8px;background:#18181b;border:1px dashed #3f3f46;border-radius:10px;min-height:80px;align-items:center}.photo-input:empty::before,.photo-input.no-files::before{content:"📷 Нажми чтобы добавить до 5 фото";color:#71717a;font-size:12px;margin:auto}.photo-input .pp{position:relative;flex:0 0 70px;height:70px;border-radius:8px;overflow:hidden;background:#26262E;flex-shrink:0}.photo-input .pp img{width:100%;height:100%;object-fit:cover;display:block}.photo-input .pp .x{position:absolute;top:2px;right:2px;width:20px;height:20px;background:rgba(0,0,0,.7);color:#fff;border:0;border-radius:50%;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1}.photo-input .pp .x:hover{background:#EF4444}.photo-input .add{flex:0 0 70px;height:70px;border:2px dashed #3f3f46;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:24px;color:#71717a;cursor:pointer;background:transparent}.photo-input .add:hover{border-color:#fb923c;color:#fb923c}
 .body{flex:1;min-width:0}
 .row1{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .badge{font-size:10px;background:rgba(55,65,81,0.8);color:#d1d5db;padding:2px 7px;border-radius:6px}
@@ -118,20 +119,7 @@ a{color:inherit;text-decoration:none}
 </style>
 </head>
 <body>
-<div id="vmark" style="background:linear-gradient(90deg,#7c3aed,#5b21b6);padding:10px;text-align:center;font-size:13px;font-weight:700;color:#0B0B0F">v99 · 18:30 — invoice URL ВСЕГДА виден (Звёзды/Тон), copy+open работают в любом клиенте</div>
-<script>
-setTimeout(()=>{const m=document.getElementById('vmark');if(m&&location.search.indexOf('keep')<0)m.style.display='none';},12000);
-</script>
-<div id="tgbar" style="display:none;background:rgba(59,130,246,0.15);border-bottom:1px solid rgba(59,130,246,0.3);padding:8px 12px;font-size:12px;text-align:center;color:#93c5fd">
-  📱 Чтобы редактировать и удалять объявления — открой через Telegram-бот <b>@Ibaraholka_bot</b> → 🍎 Открыть
-</div>
-<script>
-if(typeof _demoMode==='undefined'||!_demoMode){
-  if(typeof window.Telegram==='undefined'||!window.Telegram.WebApp||!window.Telegram.WebApp.initData){
-    const t=document.getElementById('tgbar');if(t)t.style.display='block';
-  }
-}
-</script>
+
 
 <div class="hero">
   <img src="/mini/img/hero.jpeg" alt="" style="width:110px;height:110px">
@@ -221,47 +209,31 @@ const auth=()=>{
   return {Authorization:'tma demo'};
 };
 
+// Минимальная подсказка вместо полноэкранного оверлея (vmark убран, Rill-цикл разорван через username_pin admin)
 function showOpenInTelegram(reason){
-  // Показать большой full-screen блок с кнопкой "Открыть в Telegram"
-  if(document.getElementById('tgopen-overlay'))return;
+  // Лёгкий top-toast — больше не блокируем экран
+  if(document.getElementById('tgopen-toast'))return;
   const tg=window.Telegram?.WebApp;
   const inTelegram = !!(tg && (tg.platform||'').length>0);
-  const directUrl='https://t.me/Ibaraholka_bot?startapp=open';
-  const fallbackUrl='https://t.me/Ibaraholka_bot?start=open';
-  // На мобильных Telegram openTelegramLink с startapp сразу открывает WebApp в WebView (минуя цикл с /start)
-  // Если startapp не поддерживается — fallback на /start
-  const url = (navigator.userAgent.match(/iPhone|iPad|iPod|Android/i)) ? directUrl : fallbackUrl;
-  const headline = reason || 'Открой Mini App через Telegram';
-  const html = '<div id="tgopen-overlay" style="position:fixed;inset:0;z-index:9999;background:#0B0B0F;display:flex;align-items:center;justify-content:center;padding:24px">' +
-    '<div style="max-width:380px;text-align:center">' +
-      '<div style="font-size:64px;margin-bottom:14px">📲</div>' +
-      '<h1 style="font-size:22px;margin:0 0 8px;color:#fff">'+esc(headline)+'</h1>' +
-      '<p style="font-size:14px;color:#a1a1aa;line-height:1.5;margin:0 0 22px">' +
-        'Ты открыл приложение <b>не через Telegram</b>'+(inTelegram?'.':', а Mini App работает только внутри Telegram — там безопасно и оплата проходит в 1 клик.')+
-      '</p>' +
-      '<a href="'+url+'" target="_blank" rel="noopener" onclick="if(window.Telegram?.WebApp?.openTelegramLink){try{window.Telegram.WebApp.openTelegramLink(\''+url+'\');return false;}catch(_){}}" ' +
-         'style="display:block;background:linear-gradient(135deg,#FF8A3D,#FF4D00);color:#0B0B0F;text-decoration:none;font-weight:700;padding:16px 20px;border-radius:14px;font-size:16px;margin-bottom:12px">' +
-        '🚀 Открыть в Telegram</a>' +
-      '<button onclick="copyUrlToClip(\''+url+'\')" style="display:block;width:100%;background:#27272a;color:#fff;border:0;font-weight:600;padding:13px;border-radius:12px;cursor:pointer;font-family:inherit;font-size:14px">' +
-        '📋 Скопировать ссылку на бота</button>' +
-      '<p style="font-size:12px;color:#71717a;margin-top:18px;line-height:1.4">' +
-        'После клика на «🚀 Открыть в Telegram» бот откроется → нажми <b>≡ Menu</b> внизу слева → <b>🛒 Айбарахолка</b>. Приложение загрузится с твоим профилем автоматически.</p>' +
-    '</div></div>';
+  const html = '<div id="tgopen-toast" onclick="this.remove()" style="position:fixed;top:env(safe-area-inset-top,8px);left:12px;right:12px;z-index:9999;background:linear-gradient(135deg,#FF8A3D,#FF4D00);color:#0B0B0F;padding:12px 14px;border-radius:12px;box-shadow:0 6px 24px rgba(0,0,0,.5);font-size:13px;font-weight:600;cursor:pointer;text-align:center">' +
+    '<span style="font-size:18px;margin-right:6px">'+(inTelegram?'⚠️':'📲')+'</span>'+esc(reason||'Открой Mini App через Telegram')+
+  '</div>';
   document.body.insertAdjacentHTML('beforeend',html);
+  setTimeout(()=>{const e=document.getElementById('tgopen-toast');if(e)e.remove();},6000);
 }
 window.showOpenInTelegram=showOpenInTelegram;
 
 function showClientHint(){
   if(document.getElementById('client-hint'))return;
-  const html='<div id="client-hint" style="position:fixed;top:env(safe-area-inset-top,12px);left:12px;right:12px;z-index:9998;background:linear-gradient(135deg,#1f1f2a,#0f0f14);color:#fff;padding:12px 14px;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,.5);display:flex;align-items:center;gap:10px;font-size:13px;line-height:1.4">'+
-    '<span style="font-size:24px">⚠️</span>'+
+  const html='<div id="client-hint" style="position:fixed;top:env(safe-area-inset-top,8px);left:12px;right:12px;z-index:9998;background:linear-gradient(135deg,#1f1f2a,#0f0f14);color:#fff;padding:10px 14px;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,.5);display:flex;align-items:center;gap:10px;font-size:12px;line-height:1.4;border-left:3px solid #f59e0b">'+
+    '<span style="font-size:18px">⚠️</span>'+
     '<div style="flex:1">'+
-      '<b>Кастомный Telegram-клиент</b><br>'+
-      '<span style="color:#a1a1aa;font-size:12px">Mini App не получает данные авторизации. Открой АйБарахолку в официальном Telegram (iOS/Android/Desktop).</span>'+
+      '<b>Кастомный клиент</b> — открой в официальном Telegram'+
     '</div>'+
     '<button onclick="document.getElementById(\'client-hint\')?.remove()" style="background:transparent;border:0;color:#a1a1aa;font-size:18px;cursor:pointer;padding:0 4px">✕</button>'+
   '</div>';
   document.body.insertAdjacentHTML('beforeend',html);
+  setTimeout(()=>{const e=document.getElementById('client-hint');if(e)e.remove();},8000);
 }
 window.showClientHint=showClientHint;
 let _authReady=null;
@@ -388,6 +360,32 @@ async function openAdmin(){
   }
 }
 
+function renderThumb(item,cls){
+  // Если есть photos[] — первое фото + счётчик если >1; иначе emoji fallback
+  const photos=(item.photos&&item.photos.length>0)?item.photos:((item.photo)?[item.photo]:[]);
+  const EMOJI_={iphone:'🍎',ipad:'💻',mac:'💻',airpods:'🎧',watch:'⌚',accessory:'🔌',accs:'🔌'};
+  const emoji=EMOJI_[item.cat]||'📦';
+  if(photos.length>0){
+    const extra=photos.length>1?`<span class="count">+${photos.length-1}</span>`:'';
+    return `<div class="${cls||'thumb'}"><img src="${esc(photos[0])}" alt="" loading="lazy" onerror="this.outerHTML='<span class=e>${emoji}</span>'">${extra}</div>`;
+  }
+  return `<div class="${cls||'thumb'}"><span class="e">${emoji}</span></div>`;
+}
+
+function renderGallery(item){
+  // Детальная карусель фото с dots. Если фото нет — fallback emoji.
+  const photos=(item.photos&&item.photos.length>0)?item.photos:((item.photo)?[item.photo]:[]);
+  if(photos.length===0){
+    const EMOJI_={iphone:'🍎',ipad:'💻',mac:'💻',airpods:'🎧',watch:'⌚',accessory:'🔌',accs:'🔌'};
+    return `<div style="text-align:center;font-size:64px;margin-bottom:8px">${EMOJI_[item.cat]||'📦'}</div>`;
+  }
+  const slides=photos.map((p,i)=>`<div class="slide"><img src="${esc(p)}" alt="" loading="lazy" onerror="this.parentElement.innerHTML='<div style=color:#71717a>❌</div>'"></div>`).join('');
+  const dots=photos.length>1?`<div class="dots">${photos.map((_,i)=>`<div class="dot${i===0?' on':''}"></div>`).join('')}</div>`:'';
+  const id='gal_'+(item.id||'').replace(/[^a-zA-Z0-9]/g,'_');
+  setTimeout(()=>{const el=document.getElementById(id);if(el){el.onscroll=()=>{const idx=Math.round(el.scrollLeft/el.clientWidth);el.parentElement.querySelectorAll('.dot').forEach((d,i)=>d.classList.toggle('on',i===idx));};}},50);
+  return `<div id="${id}" class="gallery">${slides}</div>${dots}`;
+}
+
 function render(){
   const q=searchQ.toLowerCase();
   const todayStart=Math.floor(Date.now()/1000)-86400;
@@ -425,7 +423,7 @@ function render(){
     const favIcon=isFav?'❤️':'🤍';
     const favCls=isFav?'btn-icon fav-on':'btn-icon';
     return `<div class="card" onclick="openDetail('${id}')">
-      <div class="emoji">${emoji}</div>
+      ${renderThumb(l,"thumb")}
       <div class="body">
         <div class="row1">${badge}<span class="meta-sm">@${username} · ${date}</span></div>
         <h3 class="title">${title}</h3>
@@ -569,7 +567,7 @@ async function openDetail(id){
   const emoji=EMOJI_[l.cat]||'📦';
   const html=`<div class="mbg" onclick="if(event.target===this)closeModal()"><div class="modal" style="position:relative;max-width:380px">
     <button class="modal-close" onclick="closeModal()">✕</button>
-    <div style="text-align:center;font-size:48px;margin-bottom:8px">${emoji}</div>
+    ${renderGallery(l)}
     <h2 style="font-size:18px;margin-bottom:4px;text-align:center">${esc(l.title||'(без названия)')}</h2>
     <div style="font-size:24px;font-weight:700;color:#fb923c;text-align:center;margin-bottom:12px">${price} ₽</div>
     ${l.description?`<div style="font-size:13px;color:#a1a1aa;line-height:1.5;margin-bottom:12px;padding:10px;background:rgba(28,28,36,0.6);border-radius:10px">${esc(l.description)}</div>`:''}
@@ -642,6 +640,9 @@ function openSellForm(showWarning){
     <input id="sellCity" type="text" placeholder="Москва" value="Москва" maxlength="60" style="width:100%;background:#18181b;color:#fff;border:1px solid #27272a;border-radius:10px;padding:12px;font-size:14px;box-sizing:border-box;font-family:inherit">
     <label style="font-size:12px;color:#a1a1aa;display:block;margin:14px 0 6px">Описание <span style="color:#71717a">(необязательно)</span></label>
     <textarea id="sellDesc" placeholder="Состояние, комплектация, причина продажи…" maxlength="500" rows="3" style="width:100%;background:#18181b;color:#fff;border:1px solid #27272a;border-radius:10px;padding:12px;font-size:14px;box-sizing:border-box;font-family:inherit;resize:none"></textarea>
+    <label style="font-size:12px;color:#a1a1aa;display:block;margin:14px 0 6px">Фото <span style="color:#71717a">(до 5 шт, необязательно)</span></label>
+    <div id="sellPhotos" class="photo-input no-files"></div>
+    <input id="sellPhotoInput" type="file" accept="image/*" multiple style="display:none">
     <label style="font-size:12px;color:#a1a1aa;display:block;margin:14px 0 6px">Тариф</label>
     <div class="chips" id="tierChips">
       <button type="button" data-tier="free" onclick="this.parentElement.querySelectorAll('button').forEach(b=>b.classList.remove('on'));this.classList.add('on');updateSellHint()" class="chip on" style="display:flex;flex-direction:column;align-items:center;gap:2px;padding:10px 14px">
@@ -679,6 +680,48 @@ function openSellForm(showWarning){
       t==='premium'?'⭐ TOP — 24 часа в топе ленты · золотой бейдж · ×2 просмотров':
       '📦 Free — появится в ленте сразу после модерации';
   };
+  // === Фото: загрузка + превью + удаление ===
+  window._sellPhotos=[];
+  const photosBox=document.getElementById('sellPhotos');
+  const photoInp=document.getElementById('sellPhotoInput');
+  function renderPhotosBox(){
+    if(!photosBox)return;
+    photosBox.classList.toggle('no-files',window._sellPhotos.length===0);
+    let html=window._sellPhotos.map((p,i)=>`<div class="pp"><img src="${p}"><button type="button" class="x" onclick="window._sellPhotos.splice(${i},1);renderPhotosBox()">✕</button></div>`).join('');
+    if(window._sellPhotos.length<5) html+=`<button type="button" class="add" onclick="document.getElementById('sellPhotoInput').click()">+</button>`;
+    photosBox.innerHTML=html;
+  }
+  if(photoInp){
+    photoInp.onchange=(e)=>{
+      const files=Array.from(e.target.files||[]).slice(0,5-window._sellPhotos.length);
+      if(files.length===0)return;
+      let pending=files.length;
+      files.forEach(f=>{
+        if(!f.type.startsWith('image/')){pending--;if(pending===0)renderPhotosBox();return;}
+        // Сжимаем через canvas до max 1280px / JPEG 0.82
+        const reader=new FileReader();
+        reader.onload=(ev)=>{
+          const img=new Image();
+          img.onload=()=>{
+            const max=1280;let w=img.width,h=img.height;
+            if(w>max||h>max){if(w>h){h=Math.round(h*max/w);w=max;}else{w=Math.round(w*max/h);h=max;}}
+            const c=document.createElement('canvas');c.width=w;c.height=h;
+            const ctx=c.getContext('2d');ctx.drawImage(img,0,0,w,h);
+            try{window._sellPhotos.push(c.toDataURL('image/jpeg',0.82));}catch(_){window._sellPhotos.push(ev.target.result);}
+            pending--;if(pending===0)renderPhotosBox();
+          };
+          img.onerror=()=>{pending--;if(pending===0)renderPhotosBox();};
+          img.src=ev.target.result;
+        };
+        reader.readAsDataURL(f);
+      });
+      e.target.value='';
+    };
+  }
+  renderPhotosBox();
+  // Клик по самому box (если пустой) — открыть picker
+  if(photosBox)photosBox.onclick=(e)=>{if(e.target===photosBox||e.target.classList.contains('no-files'))photoInp&&photoInp.click();};
+
   document.getElementById('sellSubmit').onclick=async()=>{
     const btn=document.getElementById('sellSubmit');
     const modal=document.getElementById('sellFormModal');
@@ -703,9 +746,11 @@ function openSellForm(showWarning){
     try{
       // ВАЖНО: создаём объявление С ТЕМ ТАРИФОМ, КОТОРЫЙ ВЫБРАН (не free)
       console.log('[sell] POST /listings',{title,cat,type,tier,price,city,desc:desc.length});
-      const data=await apiPost('/listings',{title,description:desc,price,cat,type,contact:'@'+(window.tg?.initDataUnsafe?.user?.username||tg?.initDataUnsafe?.user?.username||'user'),tier,city});
+      const _photos=(window._sellPhotos||[]).slice(0,5);const data=await apiPost('/listings',{title,description:desc,price,cat,type,contact:'@'+(window.tg?.initDataUnsafe?.user?.username||tg?.initDataUnsafe?.user?.username||'user'),tier,city,photos:_photos});
       console.log('[sell] response',data);
       if(!(data.ok||data.id))throw new Error(data.error||data.detail||JSON.stringify(data)||'Не удалось');
+      // Сброс photos после успешной отправки
+      window._sellPhotos=[];
       createdId=data.id;
       window.__lastListingId=createdId;
       window.__lastTier=tier;
@@ -727,7 +772,7 @@ function openSellForm(showWarning){
         const ok=await waitAuth();
         if(ok){
           try{
-            const retry=await apiPost('/listings',{title,description:desc,price,cat,type,contact:'@'+(window.tg?.initDataUnsafe?.user?.username||'user'),tier,city});
+            const retry=await apiPost('/listings',{title,description:desc,price,cat,type,contact:'@'+(window.tg?.initDataUnsafe?.user?.username||'user'),tier,city,photos:_photos});
             if(!(retry.ok||retry.id))throw new Error(retry.error||'retry_failed');
             createdId=retry.id;
             window.__lastListingId=createdId;
