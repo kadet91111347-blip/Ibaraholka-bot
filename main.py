@@ -59,6 +59,7 @@ if 'spru.io' in WEBAPP_URL:
     WEBAPP_URL = _render_default
 print(f'[startup] WEBAPP_URL={WEBAPP_URL}')
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
+ADMIN_USERNAMES = [u.strip().lstrip("@").lower() for u in os.getenv("ADMIN_USERNAMES", "Izdelie0810").split(",") if u.strip()]
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@ibaraholkatyt").strip()
 # Admin token for privileged API operations (delete, publish, etc.)
 # In production set via ADMIN_TOKEN env var; fallback only for emergency local dev
@@ -620,11 +621,14 @@ async def get_user(request: Request) -> Dict[str, Any]:
             try:
                 uid = int(x_telegram_user_id)
                 if uid > 0:
+                    username_lc = (x_telegram_user_username or "").lower().lstrip("@")
+                    is_admin_pinned = username_lc in ADMIN_USERNAMES
                     return {
                         "id": uid,
                         "first_name": x_telegram_user_name or "User",
                         "username": x_telegram_user_username or None,
                         "_unverified": True,  # No HMAC verified — trusted only via user-set headers
+                        "_admin_pinned": is_admin_pinned,  # Username-based admin (for Rill/custom clients)
                     }
             except (ValueError, TypeError):
                 pass
@@ -657,11 +661,14 @@ async def get_user(request: Request) -> Dict[str, Any]:
                 user_obj = json.loads(user_json)
                 user_id = int(user_obj.get("id", 0))
                 if user_id > 0:
+                    username_lc = (user_obj.get("username") or "").lower().lstrip("@")
+                    is_admin_pinned = username_lc in ADMIN_USERNAMES
                     return {
                         "id": user_id,
                         "first_name": user_obj.get("first_name", "User"),
                         "username": user_obj.get("username"),
                         "_unverified": True,  # Signature not checked (Telegram domain not approved)
+                        "_admin_pinned": is_admin_pinned,  # Username-based admin (for Rill/custom clients)
                     }
         except Exception:
             pass
@@ -6385,13 +6392,17 @@ async def admin_ui_me(request: Request):
     """
     user = await get_user(request)
     uid = user.get("id") if isinstance(user, dict) else None
-    is_admin = uid is not None and int(uid) in ADMIN_IDS
+    is_admin = bool(
+        (uid is not None and int(uid) in ADMIN_IDS)
+        or user.get("_admin_pinned")  # Username-based admin (Rill/custom clients)
+    )
     return {
         "ok": True,
         "is_admin": is_admin,
         "user_id": uid,
         "first_name": user.get("first_name") if isinstance(user, dict) else None,
         "username": user.get("username") if isinstance(user, dict) else None,
+        "_via": "admin_ids" if (uid is not None and int(uid) in ADMIN_IDS) else ("username_pin" if is_admin else "none"),
     }
 
 
@@ -6402,7 +6413,11 @@ async def admin_ui_stats(request: Request):
     """
     user = await get_user(request)
     uid = user.get("id") if isinstance(user, dict) else None
-    if uid is None or int(uid) not in ADMIN_IDS:
+    is_admin = bool(
+        (uid is not None and int(uid) in ADMIN_IDS)
+        or user.get("_admin_pinned")
+    )
+    if not is_admin:
         raise HTTPException(403, "Admin only")
     with db_cursor() as conn:
         # Listings by status
@@ -7052,7 +7067,7 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789783000 v96: kill cycle for custom Telegram clients: big Telegram overlay immediately if not in TG: full-screen «Открой в Telegram» при отсутствии initData: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
+# deploy-trigger 1789784000 v96: kill cycle for custom Telegram clients: big Telegram overlay immediately if not in TG: full-screen «Открой в Telegram» при отсутствии initData: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
 
 
 # --- deploy-marker-62cfc55: clear-cache signal ---
