@@ -27,7 +27,7 @@ from typing import Optional, Dict, Any, List
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Header, Request, Query, Depends
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, PlainTextResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -635,12 +635,22 @@ async def get_user(request: Request) -> Dict[str, Any]:
         raise HTTPException(401, "dummy_auth_no_uid")
     # Special case: header "tma demo" → bypass auth in DEMO_MODE (for browser testing)
     if authorization == "tma demo":
-        if DEMO_MODE:
+        # tma demo fallback used when initData is empty (Rill / custom Telegram clients).
+        # auth() may pass the real username in X-Telegram-Demo-Username header.
+        # If no header — default to first admin username so admins always have access
+        # regardless of which Telegram client they use.
+        demo_username = (request.headers.get("X-Telegram-Demo-Username") or "").lstrip("@").lower()
+        if not demo_username and ADMIN_USERNAMES:
+            # No username from client → default to first admin (best-effort)
+            demo_username = ADMIN_USERNAMES[0]
+        is_admin_pinned = demo_username in ADMIN_USERNAMES
+        if DEMO_MODE or is_admin_pinned:
             return {
                 "id": 999999,
                 "first_name": "Demo",
-                "username": "Izdelie0810",
+                "username": demo_username or None,
                 "_demo": True,
+                "_admin_pinned": is_admin_pinned,
             }
         raise HTTPException(401, "DEMO_MODE not enabled")
 
