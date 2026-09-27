@@ -6297,9 +6297,20 @@ async def admin_listings_batch(request: Request, admin_token: str = ""):
 
     Body: {"action": "approve"|"reject"|"delete", "ids": ["l_1", "l_2", ...]}
     Возвращает сколько обработано успешно, сколько нет.
+    Auth: либо admin_token query, либо Telegram admin user (ADMIN_IDS / username_pin).
     """
-    if admin_token != ADMIN_TOKEN:
-        raise HTTPException(403, "Admin token required")
+    if admin_token == ADMIN_TOKEN:
+        is_admin = True
+        uid = None
+    else:
+        user = await get_user(request)
+        uid = user.get("id") if isinstance(user, dict) else None
+        is_admin = bool(
+            (uid is not None and int(uid) in ADMIN_IDS)
+            or user.get("_admin_pinned")
+        )
+    if not is_admin:
+        raise HTTPException(403, "Admin only")
     try:
         body = await request.json()
     except Exception:
@@ -6348,15 +6359,26 @@ async def admin_listings_batch(request: Request, admin_token: str = ""):
 
 
 @app.get("/admin/export", tags=["admin"])
-async def admin_export(table: str = "listings", fmt: str = "csv", admin_token: str = ""):
-    """Admin: экспорт таблицы в CSV.
+async def admin_export(request: Request, table: str = "listings", fmt: str = "csv", admin_token: str = ""):
+    """Admin: экспорт таблицы в CSV/JSON.
 
     table ∈ {listings, payments, users, reports}
+    fmt ∈ {csv, json}
+    Auth: либо admin_token query, либо Telegram admin user.
     """
-    if admin_token != ADMIN_TOKEN:
-        raise HTTPException(403, "Admin token required")
-    if fmt != "csv":
-        return {"ok": False, "error": "fmt must be csv"}
+    if admin_token == ADMIN_TOKEN:
+        is_admin = True
+    else:
+        user = await get_user(request)
+        uid = user.get("id") if isinstance(user, dict) else None
+        is_admin = bool(
+            (uid is not None and int(uid) in ADMIN_IDS)
+            or user.get("_admin_pinned")
+        )
+    if not is_admin:
+        raise HTTPException(403, "Admin only")
+    if fmt not in ("csv", "json"):
+        return {"ok": False, "error": "fmt must be csv or json"}
     if table not in ("listings", "payments", "users", "reports"):
         return {"ok": False, "error": "table must be listings|payments|users|reports"}
     from fastapi.responses import Response
@@ -6376,6 +6398,7 @@ async def admin_export(table: str = "listings", fmt: str = "csv", admin_token: s
     }
     sql, cols = queries[table]
     writer.writerow(cols)
+    rows_data = []  # собираем для JSON
     try:
         with db_cursor() as conn:
             if table == "payments":
@@ -6383,6 +6406,7 @@ async def admin_export(table: str = "listings", fmt: str = "csv", admin_token: s
                 for r in rows:
                     d = _row_to_dict(r, cols)
                     writer.writerow([d.get(c, "") for c in cols])
+                    rows_data.append(d)
             elif table == "users":
                 # users table может не существовать — агрегируем из listings
                 try:
@@ -6394,16 +6418,26 @@ async def admin_export(table: str = "listings", fmt: str = "csv", admin_token: s
                     rows = []
                 for r in rows:
                     if isinstance(r, dict):
-                        writer.writerow([r["user_id"], r["user_username"] or "", r["user_name"] or "", r.get("COUNT(*)", 0), r.get("MIN(created)", 0)])
+                        d = {"id": r["user_id"], "username": r.get("user_username") or "",
+                             "first_name": r.get("user_name") or "",
+                             "listings_count": r.get("COUNT(*)", 0),
+                             "first_seen": r.get("MIN(created)", 0)}
+                        writer.writerow([d["id"], d["username"], d["first_name"], d["listings_count"], d["first_seen"]])
                     else:
-                        writer.writerow([r[0], r[2] or "", r[1] or "", r[3], r[4]])
+                        d = {"id": r[0], "username": r[2] or "", "first_name": r[1] or "",
+                             "listings_count": r[3], "first_seen": r[4]}
+                        writer.writerow([d["id"], d["username"], d["first_name"], d["listings_count"], d["first_seen"]])
+                    rows_data.append(d)
             else:
                 rows = conn.execute(sql).fetchall()
                 for r in rows:
                     d = _row_to_dict(r, cols)
                     writer.writerow([d.get(c, "") for c in cols])
+                    rows_data.append(d)
     except Exception as e:
         return {"ok": False, "error": str(e)[:200]}
+    if fmt == "json":
+        return {"ok": True, "table": table, "rows": rows_data, "count": len(rows_data)}
     return Response(
         content=buf.getvalue(),
         media_type="text/csv",
@@ -6412,29 +6446,43 @@ async def admin_export(table: str = "listings", fmt: str = "csv", admin_token: s
 
 
 @app.post("/admin/payments/{payment_id}/refund", tags=["admin"])
-async def admin_refund_payment(payment_id: int, request: Request, admin_token: str = ""):
+async def admin_refund_payment(payment_id: str, request: Request, admin_token: str = ""):
     """Admin: пометить платёж как refunded (для ручного возврата через банк).
 
+    payment_id: listing_id (например l_xxx) — у ton_payments нет своего PK.
     Body: {"reason": "..."}
+    Auth: либо admin_token query, либо Telegram admin user.
     """
-    if admin_token != ADMIN_TOKEN:
-        raise HTTPException(403, "Admin token required")
+    if admin_token == ADMIN_TOKEN:
+        is_admin = True
+    else:
+        user = await get_user(request)
+        uid = user.get("id") if isinstance(user, dict) else None
+        is_admin = bool(
+            (uid is not None and int(uid) in ADMIN_IDS)
+            or user.get("_admin_pinned")
+        )
+    if not is_admin:
+        raise HTTPException(403, "Admin only")
     try:
         body = await request.json()
     except Exception:
         body = {}
     reason = (body.get("reason") or "").strip()[:200]
     now = int(time.time())
-    # ton_payments не имеет своих id — используем row_number через _next_id
     with db_cursor() as conn:
-        rows = conn.execute("SELECT listing_id, tier, comment FROM ton_payments ORDER BY created DESC").fetchall()
-        if not rows or payment_id < 1 or payment_id > len(rows):
+        # payment_id теперь это listing_id — ищем платёж по нему
+        rows = conn.execute(
+            "SELECT listing_id, tier, comment FROM ton_payments WHERE listing_id=? ORDER BY created DESC LIMIT 1",
+            (payment_id,)
+        ).fetchall()
+        if not rows:
             return {"ok": False, "error": "payment_not_found"}
-        target = rows[payment_id - 1]
-        if isinstance(target, dict):
-            listing_id, tier, comment = target["listing_id"], target.get("tier", ""), target.get("comment", "")
+        row = rows[0]
+        if isinstance(row, dict):
+            listing_id, tier, comment = row["listing_id"], row.get("tier", ""), row.get("comment", "")
         else:
-            listing_id, tier, comment = target[0], target[1] or "", target[2] or ""
+            listing_id, tier, comment = row[0], row[1] or "", row[2] or ""
         # Получим user_id из listings
         row = conn.execute("SELECT user_id FROM listings WHERE id=?", (listing_id,)).fetchone()
         user_id = row["user_id"] if row and isinstance(row, dict) else (row[0] if row else None)
@@ -7140,7 +7188,7 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789788000 v96: kill cycle for custom Telegram clients: big Telegram overlay immediately if not in TG: full-screen «Открой в Telegram» при отсутствии initData: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
+# deploy-trigger 1789789000 v96: kill cycle for custom Telegram clients: big Telegram overlay immediately if not in TG: full-screen «Открой в Telegram» при отсутствии initData: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
 
 
 # --- deploy-marker-62cfc55: clear-cache signal ---
