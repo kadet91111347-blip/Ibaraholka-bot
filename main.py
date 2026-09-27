@@ -2059,6 +2059,38 @@ async def what_auth_v2(request: Request):
     out = f"auth_len={len(auth)} auth_prefix={auth[:20]!r}\nuser_header={user_h}\nraw_headers={dict(request.headers)}"
     return out
 
+
+@app.get("/admin/me/whoami", response_class=PlainTextResponse)
+async def whoami(request: Request):
+    """Показывает что сервер знает о клиенте — для отладки Rill/Telegram."""
+    from fastapi import Header
+    auth = request.headers.get("authorization", "(none)")
+    out = [f"authorization_len: {len(auth)}"]
+    out.append(f"authorization_prefix: {auth[:30]!r}")
+    if auth.startswith("tma "):
+        data = auth[4:]
+        from urllib.parse import parse_qs, unquote
+        try:
+            params = parse_qs(data)
+            out.append(f"params: {list(params.keys())}")
+            if 'user' in params:
+                import json as _json
+                u = _json.loads(unquote(params['user'][0]))
+                out.append(f"user: {u}")
+            if 'hash' in params:
+                out.append(f"hash_len: {len(params['hash'][0])} (valid hex={'0'*64 if params['hash'][0] == '0'*64 else 'real'})")
+        except Exception as e:
+            out.append(f"parse_err: {e}")
+    # Проверим get_user
+    try:
+        from main import get_user
+        # Нужно вызвать get_user без Request
+        user = None
+        # Просто вернём что получилось
+    except Exception as e:
+        out.append(f"get_user_err: {e}")
+    return "\n".join(out)
+
 @app.get("/debug/what-auth", response_class=PlainTextResponse)
 async def what_auth(request: Request):
     """Диагностика: что реально приходит от клиента."""
@@ -7098,7 +7130,7 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789786000 v96: kill cycle for custom Telegram clients: big Telegram overlay immediately if not in TG: full-screen «Открой в Telegram» при отсутствии initData: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
+# deploy-trigger 1789787000 v96: kill cycle for custom Telegram clients: big Telegram overlay immediately if not in TG: full-screen «Открой в Telegram» при отсутствии initData: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
 
 
 # --- deploy-marker-62cfc55: clear-cache signal ---
