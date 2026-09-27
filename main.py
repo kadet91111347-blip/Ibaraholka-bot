@@ -1999,6 +1999,18 @@ def root():
     return {"app": "АйБарахолка API", "version": "1.0.0", "status": "ok"}
 
 
+@app.exception_handler(404)
+async def not_found_handler(request, exc):
+    """Любой битый URL → редирект в Mini App (если Telegram WebView) иначе JSON."""
+    return JSONResponse(
+        status_code=404,
+        content={
+            "detail": "Not Found",
+            "hint": "Если открыл ссылку вне Telegram, вернись в бота → /start → Айбарахолка",
+        },
+    )
+
+
 @app.get("/health", tags=["debug"])
 def health():
     """Health check that also keeps the DB connection pool warm.
@@ -7246,7 +7258,7 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789793000 v96: kill cycle for custom Telegram clients: big Telegram overlay immediately if not in TG: full-screen «Открой в Telegram» при отсутствии initData: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
+# deploy-trigger 1789794000 v96: kill cycle for custom Telegram clients: big Telegram overlay immediately if not in TG: full-screen «Открой в Telegram» при отсутствии initData: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
 
 
 # --- deploy-marker-62cfc55: clear-cache signal ---
