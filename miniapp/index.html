@@ -210,7 +210,7 @@ const auth=()=>{
 };
 
 // Минимальная подсказка вместо полноэкранного оверлея (vmark убран, Rill-цикл разорван через username_pin admin)
-  var v = "v110 · 19:50 tbank-modal-all-handlers"
+  var v = "v111 · 20:05 tbank-url-fix"
 function showOpenInTelegram(reason){
   // Лёгкий top-toast — больше не блокируем экран
   if(document.getElementById('tgopen-toast'))return;
@@ -865,17 +865,17 @@ function openSellForm(showWarning){
         const mbg = document.body.lastElementChild;
         const tg = window.Telegram?.WebApp;
         mbg.querySelector('#v110_tg').onclick = () => {
-          try { if (tg && tg.openLink) { tg.openLink('${url}', {try_in_app_browser: true}); } else { window.open('${url}', '_blank'); } }
+          try { if (tg && tg.openLink) { tg.openLink(url, {try_in_app_browser: true}); } else { window.open(url, '_blank'); } }
           catch (e) { toast('❌ Не открылось — скопируй ссылку'); }
-          setTimeout(()=>{ if(document.visibilityState==='visible'){ window.open('${url}','_blank'); }}, 600);
+          setTimeout(()=>{ if(document.visibilityState==='visible'){ window.open(url,'_blank'); }}, 600);
           haptic('success');
         };
         mbg.querySelector('#v110_ext').onclick = () => {
-          try { window.open('${url}', '_blank'); toast('🌐 Открываю в браузере…'); }
+          try { window.open(url, '_blank'); toast('🌐 Открываю в браузере…'); }
           catch (e) { toast('❌ Не открылось'); }
         };
         mbg.querySelector('#v110_copy').onclick = () => {
-          try { navigator.clipboard.writeText('${url}'); toast('✅ Ссылка скопирована — вставь в браузер'); }
+          try { navigator.clipboard.writeText(url); toast('✅ Ссылка скопирована — вставь в браузер'); }
           catch (e) { toast('❌ Не удалось — выдели вручную'); }
         };
       };
