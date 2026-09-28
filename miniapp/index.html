@@ -664,13 +664,24 @@ function openSellForm(showWarning){
   // глобальный обработчик подсказки
   // Показываем статус внутри формы (серый блок)
   window.showFormStatus=(modal,msg)=>{
+    // v117: защита от null sellSubmit (форма может быть уже закрыта) → unhandled crash
     let s=document.getElementById('sellFormStatus');
-    if(!s){s=document.createElement('div');s.id='sellFormStatus';s.style.cssText='background:#18181b;border:1px solid #27272a;border-radius:10px;padding:10px;margin:10px 0;font-size:12px;color:#a1a1aa;text-align:center';const btn=document.getElementById('sellSubmit');btn.parentNode.insertBefore(s,btn);}
+    if(!s){
+      s=document.createElement('div');s.id='sellFormStatus';
+      s.style.cssText='background:#18181b;border:1px solid #27272a;border-radius:10px;padding:10px;margin:10px 0;font-size:12px;color:#a1a1aa;text-align:center';
+      const btn=document.getElementById('sellSubmit');
+      if(btn&&btn.parentNode){btn.parentNode.insertBefore(s,btn);}else{document.body.appendChild(s);}
+    }
     s.textContent=msg;s.style.borderColor='#27272a';s.style.color='#a1a1aa';s.style.background='#18181b';
   };
   window.showFormError=(modal,msg)=>{
     let s=document.getElementById('sellFormStatus');
-    if(!s){s=document.createElement('div');s.id='sellFormStatus';s.style.cssText='background:rgba(239,68,68,.15);border:1px solid #EF4444;border-radius:10px;padding:10px;margin:10px 0;font-size:12px;color:#FCA5A5;text-align:center';const btn=document.getElementById('sellSubmit');btn.parentNode.insertBefore(s,btn);}
+    if(!s){
+      s=document.createElement('div');s.id='sellFormStatus';
+      s.style.cssText='background:rgba(239,68,68,.15);border:1px solid #EF4444;border-radius:10px;padding:10px;margin:10px 0;font-size:12px;color:#FCA5A5;text-align:center';
+      const btn=document.getElementById('sellSubmit');
+      if(btn&&btn.parentNode){btn.parentNode.insertBefore(s,btn);}else{document.body.appendChild(s);}
+    }
     s.textContent=msg;s.style.borderColor='#EF4444';s.style.color='#FCA5A5';s.style.background='rgba(239,68,68,.15)';
   };
   window.updateSellHint=()=>{
@@ -836,15 +847,26 @@ function openSellForm(showWarning){
         <button class="btn-cta" style="width:100%;background:transparent;color:#a1a1aa;margin-top:10px;border:0;cursor:pointer;font-size:13px" onclick="closeModal()">Оплачу позже</button>
       </div></div>`;
       document.body.insertAdjacentHTML('beforeend',html);
-    // v116: payTbankBtn — открываем вторую модалку (payMethod tinkoff), там есть кнопка «📱 Открыть в приложении Т‑Банк» (Android intent).
+    // v116 + v117: payTbankBtn — открываем вторую модалку (payMethod tinkoff), там есть кнопка «📱 Открыть в приложении Т‑Банк» (Android intent).
+    // v117 — оборачиваем в try/catch иначе silent fail когда showFormStatus падает
     const tBtn=document.getElementById('payTbankBtn');
     if(tBtn){
       tBtn.onclick=async(e)=>{
-        e.preventDefault();
-        const listingId=tBtn.dataset.listingId;
-        const tier=tBtn.dataset.tier;
-        if(window.payMethod){await window.payMethod('tinkoff',listingId,tier);}
-        else{toast('payMethod не найден');}
+        e.preventDefault();e.stopPropagation();
+        tBtn.disabled=true;
+        const oldText=tBtn.innerHTML;
+        tBtn.textContent='⏳ Открываю…';
+        try{
+          if(!window.payMethod){throw new Error('payMethod не загружен');}
+          await window.payMethod('tinkoff',tBtn.dataset.listingId,tBtn.dataset.tier);
+        }catch(err){
+          console.error('[v117] tinkoff pay error:',err);
+          toast('❌ '+(err&&err.message?err.message:'ошибка открытия'));
+          haptic('error');
+        }finally{
+          tBtn.disabled=false;
+          tBtn.innerHTML=oldText;
+        }
       };
     }
     const sBtn=document.getElementById('payStarsBtn');
@@ -1000,7 +1022,7 @@ window.payMethod=async function(method, listingId, tier){
 
   if(method==='tinkoff'){
     // Получаем tinkoff_url из бэка (mode='tinkoff' когда нет yoowallet)
-    showFormStatus(document.body,'⏳ Открываю Тинькофф…');
+    // v117: НЕ зовём showFormStatus(document.body,..) — оно крашится на null sellSubmit после закрытия формы → unhandled promise → кнопка молчит
     try{
       const r=await apiPost('/payments/yukassa/create',{listing_id:listingId,tier,user_id:window.tg?.initDataUnsafe?.user?.id||0});
       if(!r.ok)throw new Error(r.error||'payment_create_failed');
