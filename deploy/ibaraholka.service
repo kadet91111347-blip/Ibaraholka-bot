@@ -1,0 +1,17 @@
+[Unit]
+Description=Ibaraholka Telegram Bot + Mini App
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=ibaraholka
+WorkingDirectory=/opt/ibaraholka
+EnvironmentFile=/opt/ibaraholka/.env
+ExecStart=/opt/ibaraholka/venv/bin/python main.py
+Restart=on-failure
+RestartSec=10s
+StandardOutput=append:/var/log/ibaraholka/out.log
+StandardError=append:/var/log/ibaraholka/err.log
+
+[Install]
+WantedBy=multi-user.target
