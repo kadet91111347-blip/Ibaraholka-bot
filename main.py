@@ -2939,15 +2939,28 @@ async def tinkoff_notify(request: Request):
 
 
 @app.post("/payments/activate", tags=["payments"])
-async def payments_activate(request: Request):
+async def payments_activate(request: Request, admin_token: str = ""):
     """Step 2: user confirms publication after seeing payment deducted.
 
     Used by all 3 methods (Tinkoff / Stars / TON) — backend checks status='paid'
     and only then flips to active + posts to channel.
+
+    Auth: admin_token query (`?admin_token=...`) OR Telegram user that owns the listing.
+    Note: TON/Tinkoff webhooks need to flip status='paid' first, then user triggers
+    this endpoint. Bots/cron may use the admin_token path.
     """
-    body = await request.json()
-    listing_id = body.get("listing_id", "")
-    user_id = int(body.get("user_id", 0) or 0)
+    if admin_token == ADMIN_TOKEN:
+        body = await request.json()
+        listing_id = body.get("listing_id", "")
+        user_id = int(body.get("user_id", 0) or 0)
+    else:
+        try:
+            user = await get_user(request)
+        except Exception:
+            return {"ok": False, "error": "auth_required"}
+        body = await request.json()
+        listing_id = body.get("listing_id", "")
+        user_id = int(user.get("id") or 0)
 
     if not listing_id:
         return {"ok": False, "error": "no listing_id"}
@@ -3383,7 +3396,7 @@ async def create_stars_invoice(request: Request, user: Dict = Depends(get_user))
         ).fetchone()
 
     if not row:
-        raise HTTPException(404, "Listing not found or not yours")
+        return {"ok": False, "error": "listing_not_found_or_not_yours"}
 
     def _g(k, i):
         return row[k] if isinstance(row, dict) else row[i]
@@ -5529,7 +5542,7 @@ async def favorites_add(listing_id: str, user: Dict[str, Any] = Depends(get_user
     with db_cursor() as conn:
         row = conn.execute("SELECT id FROM listings WHERE id = ?", (listing_id,)).fetchone()
         if not row:
-            raise HTTPException(404, "Listing not found")
+            return {"ok": False, "error": "listing_not_found"}
         conn.execute(
             "INSERT INTO favorites (user_id, listing_id, created) VALUES (?, ?, ?) ON CONFLICT (user_id, listing_id) DO NOTHING",
             (uid, listing_id, now)
@@ -5609,7 +5622,7 @@ async def listing_view(listing_id: str, user: Dict[str, Any] = Depends(get_user)
     with db_cursor() as conn:
         row = conn.execute("SELECT id FROM listings WHERE id = ?", (listing_id,)).fetchone()
         if not row:
-            raise HTTPException(404, "Listing not found")
+            return {"ok": False, "error": "listing_not_found"}
         # антинакрутка: один юзер = 1 просмотр в 5 минут
         recent = conn.execute(
             "SELECT id FROM listing_views WHERE listing_id = ? AND viewer_id = ? AND created > ?",
@@ -7258,7 +7271,7 @@ async def setup_webhook(request: Request):
         }
     }
 
-# deploy-trigger 1789800000 v96: kill cycle for custom Telegram clients: big Telegram overlay immediately if not in TG: full-screen «Открой в Telegram» при отсутствии initData: rate limit + improved health + Sentry + openapi tags + Docker + GitHub Actions: payment modal opens even if /listings fails (loadListings wrapped in try/catch)
+# deploy-trigger 1789801000 v119: B6/B7 fixes (stars invoice JSON error + activate auth)
 
 
 # --- deploy-marker-62cfc55: clear-cache signal ---

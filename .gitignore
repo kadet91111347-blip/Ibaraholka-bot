@@ -13,3 +13,5 @@ ibaraholka.db
 *.pyc
 *.tar.gz
 *.zip
+miniapp/*.bak2
+deploy/setup.sh

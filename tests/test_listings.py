@@ -94,7 +94,7 @@ def test_activate_after_paid(client, auth_headers):
     lid = r.json()["id"]
     client.post(f"/listings/{lid}/confirm-paid", headers=auth_headers, json={})
     # activate is admin/test path, requires listing_id+user_id body
-    r2 = client.post("/payments/activate", json={"listing_id": lid, "user_id": 100})
+    r2 = client.post("/payments/activate?admin_token=test-admin-token", json={"listing_id": lid, "user_id": 100})
     assert r2.status_code == 200
     body = r2.json()
     assert body.get("ok") is True
